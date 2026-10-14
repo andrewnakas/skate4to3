@@ -71,7 +71,29 @@ LEVEL_CROPS = {
 LEVEL_TITLES = {'dingolevel_isle_of_grom': 'Isle of Grom', 'dingolevel_mpr': 'Summer Camp'}
 _LEVEL_JSON = os.path.join(WORK, 'level.json')
 LEVEL = json.load(open(_LEVEL_JSON))['level'] if os.path.exists(_LEVEL_JSON) else 'dingolevel_isle_of_grom'
-CROP = LEVEL_CROPS.get(LEVEL, CROP)
+
+
+def auto_crop(margin=100.0):
+    """Footprint for a level with no hand-made crop: the 0.5-99.5 percentile of its placements'
+    x/z (vista backdrops excluded), grown by `margin` metres."""
+    try:
+        rows = json.load(open(os.path.join(WORK, 'instances.json')))
+    except OSError:
+        return CROP
+    t = [T[3] for m, T, src in rows if m and not re.search(r'/[^/]*vista$', src)]
+    try:   # Studio-built (ReSkate) maps place everything as blueprint references
+        t += [M[3] for _k, _bp, M, src, ex in json.load(open(os.path.join(WORK, 'placements.json')))
+              if not ex and not re.search(r'/[^/]*vista$', src)]
+    except OSError:
+        pass
+    t = np.array(t, float)
+    if len(t) == 0:
+        return CROP
+    lo, hi = np.percentile(t[:, [0, 2]], 0.5, axis=0), np.percentile(t[:, [0, 2]], 99.5, axis=0)
+    return (float(lo[0] - margin), float(lo[1] - margin), float(hi[0] + margin), float(hi[1] + margin))
+
+
+CROP = LEVEL_CROPS[LEVEL] if LEVEL in LEVEL_CROPS else auto_crop()
 # Distant backdrop sublevels (iog_watervista, bam_vista): a vista mesh kilometres out, in its
 # own frame. They wreck the recentre and nobody can skate them.
 VISTA_SRC = re.compile(r'/[^/]*vista$')

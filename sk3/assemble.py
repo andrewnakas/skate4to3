@@ -192,7 +192,23 @@ def clip_polyline(points, size):
 
 
 # --------------------------------------------------------------------------------------------- main
-def assemble(glb_dir, out_dir, size=100.0):
+def auto_shift(glb_dir, size):
+    """Whole-tile x/z shift that centres the map's tile box on the origin. Isle of Grom crashed the
+    game with tiles out at z 600-700 and loads once moved 200 m; recentring is the default."""
+    t = json.load(open(os.path.join(glb_dir, 'd2s3_tiles.json')))
+    keys = [tuple(int(v) for v in k.replace('_', ' ').split()) for k in t] if isinstance(t, dict) else []
+    if not keys:
+        return (0.0, 0.0, 0.0)
+    xs, zs = [k[0] for k in keys], [k[1] for k in keys]
+    cx, cz = (min(xs) + max(xs)) / 2, (min(zs) + max(zs)) / 2
+    return (-round(cx / size) * size, 0.0, -round(cz / size) * size)
+
+
+def assemble(glb_dir, out_dir, size=100.0, shift=None):
+    if shift is None:
+        shift = auto_shift(glb_dir, size)
+    print(f'  shift {shift}')
+    shift = np.asarray(shift, np.float64)
     os.makedirs(out_dir, exist_ok=True)
     mats = json.load(open(os.path.join(glb_dir, 'blenrose_materials.json')))
     tex = TextureSet(out_dir)
@@ -203,6 +219,7 @@ def assemble(glb_dir, out_dir, size=100.0):
     for bf in blocks:
         g = Glb(os.path.join(glb_dir, bf))
         for pr in g.prims():
+            pr['P'] = pr['P'] + shift
             m = mats.get(pr['material'], {})
             pres = not m.get('exclude_pres', False)
             collide = not m.get('exclude_collision', False)
@@ -239,7 +256,7 @@ def assemble(glb_dir, out_dir, size=100.0):
     sj = os.path.join(glb_dir, 'splines.json')
     if os.path.exists(sj):
         for s in json.load(open(sj)).get('splines', []):
-            for key, runs in clip_polyline(s['points'], size).items():
+            for key, runs in clip_polyline(np.asarray(s['points'], np.float64) + shift, size).items():
                 spl[key].extend(runs)
 
     tiles = {}
@@ -279,7 +296,7 @@ def assemble(glb_dir, out_dir, size=100.0):
             rec['sim_tris'] = int(sum(len(t) for t in Ts))
             rec['splines'] = len(spl[key])
         tiles[name] = rec
-    json.dump({'tile_size': size, 'tiles': tiles,
+    json.dump({'tile_size': size, 'shift': [float(v) for v in shift], 'tiles': tiles,
                'textures': {f'{k:016x}': v for k, v in tex.meta.items()}},
               open(os.path.join(out_dir, 'tiles.json'), 'w'), indent=1)
     print(f'  tiles {len(tiles)}, render parts {sum(len(v) for v in render.values())}, '
@@ -293,8 +310,9 @@ def main():
     ap.add_argument('glb_dir')
     ap.add_argument('out_dir')
     ap.add_argument('--tile', type=float, default=100.0)
+    ap.add_argument('--shift', default=None, help='x,y,z metres added to every position (default: centre the map)')
     a = ap.parse_args()
-    assemble(a.glb_dir, a.out_dir, a.tile)
+    assemble(a.glb_dir, a.out_dir, a.tile, tuple(float(v) for v in a.shift.split(',')) if a.shift else None)
 
 
 if __name__ == '__main__':

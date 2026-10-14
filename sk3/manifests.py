@@ -21,6 +21,7 @@ All binary manifests are big-endian and start {magic, u32 version 3, u32 0, u32 
 from __future__ import annotations
 
 import re
+import os
 import struct
 from dataclasses import dataclass, field
 
@@ -287,7 +288,8 @@ def generate(dist: str, kind: str, tiles: list, cell: float = 100.0, platform: i
     half = cell / 2
     for t in order:
         is_global = t.name.endswith('_Global')
-        aid = glob_id if is_global else fnv1_64(t.name)
+        aid = glob_id if is_global else (fnv1_64(f'{t.name}_{dist}') if os.environ.get('SK3_UNIQUE_TILE_IDS')
+                                          else fnv1_64(t.name))
         size = t.stream_size if size_includes_header else t.stream_size - alignment
         cm.entries.append(CmapEntry(aid, ROOT_GROUP if is_global else glob_id, alignment, size,
                                     len(t.arenas), t.name))

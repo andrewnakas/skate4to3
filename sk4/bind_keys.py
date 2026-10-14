@@ -36,8 +36,13 @@ DEPOT_RES = 0x73312045
 ROLE_RX = re.compile(r'_(c|co|ny|n|msk|osk|osm|ogk|rgb|packed|cu|smao|ta|isk|isv|utk)$')
 
 
+# ReSkate Studio names imported textures '<stem>_<role>-<12 hex>[_basecolor]_<n>'
+# (e.g. terrain_rock_c-9dd1bff34a78_basecolor_14, m_d2s3_terrain_ny-87bbe7914db9_1).
+STUDIO_TAIL = re.compile(r'-[0-9a-f]{12}(_[a-z]+)?_\d+$')
+
+
 def role_of(name: str) -> str:
-    leaf = name.rsplit('/', 1)[-1]
+    leaf = STUDIO_TAIL.sub('', name.rsplit('/', 1)[-1])
     if leaf.startswith('neutral') or '/default/' in name:
         return 'neutral'
     if leaf.startswith('t_fx') or '/panoramas/' in name or '/mask/global' in name:
@@ -53,7 +58,8 @@ def shader_id(params) -> str:
 
 
 def family_of(name: str) -> str:
-    return ROLE_RX.sub('', name)
+    head, _, leaf = name.rpartition('/')
+    return head + '/' + ROLE_RX.sub('', STUDIO_TAIL.sub('', leaf))
 
 
 def load_depots():

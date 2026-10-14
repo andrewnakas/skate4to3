@@ -58,14 +58,25 @@ MESHSET_TYPE = 0x49B156D4
 def _tolerant_packages():
     """Language TOCs use per-language package ids; name them instead of failing."""
     orig = sb.package_name
-    sb.package_name = lambda a, hi: (orig(a, hi) if (a, hi) in sb.PACKAGES
-                                     else f"pkg_{a:04x}_{hi:04x}")
+    def _tol(a, hi, _f=orig):
+        try:
+            return _f(a, hi)
+        except KeyError:
+            return f"pkg_{a:04x}_{hi:04x}"
+    sb.package_name = _tol
 
 
 def tocs():
     """Every binary superbundle TOC; level TOCs first so their assets are tagged by level."""
+    found = {}
+    base = os.path.join(GAME, 'Data')
+    for p in glob.glob(os.path.join(base, '**', '*.toc'), recursive=True):
+        found[os.path.relpath(p, base).lower()] = p
+    if sb.MOD_ROOT:             # a mod's TOCs replace the base TOCs of the same path, plus its own
+        for p in glob.glob(os.path.join(sb.MOD_ROOT, 'Win32', '**', '*.toc'), recursive=True):
+            found[os.path.relpath(p, sb.MOD_ROOT).lower()] = p
     out = []
-    for p in glob.glob(os.path.join(GAME, 'Data', '**', '*.toc'), recursive=True):
+    for p in found.values():
         d = open(p, 'rb').read(0x22D)
         if len(d) > 0x22C and not d[0x22C] & 0x80:
             out.append(p)

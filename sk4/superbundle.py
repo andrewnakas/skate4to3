@@ -21,8 +21,20 @@ PACKAGES = {
 }
 
 
+# A ReSkate mod (SKATE_MOD_ROOT = Mods/<name>) ships its own CAS files under Win32/configurations/
+# layout/<package>/; its TOCs flag those with bit 16 of the package word (0x17837 = the mod's
+# defaultinstallpackage; measured on DM_Jumpline and zeex64-Full_Skate_3_Map). Such a package
+# resolves to an ABSOLUTE directory, which os.path.join(LAYOUT, pkg, ...) then follows unchanged.
+MOD_ROOT = os.environ.get('SKATE_MOD_ROOT', '')
+MOD_FLAG = 0x10000
+
+
 def package_name(a: int, hi: int) -> str:
     try:
+        if a & MOD_FLAG:
+            if not MOD_ROOT:
+                raise KeyError
+            return os.path.join(MOD_ROOT, 'Win32', 'configurations', 'layout', PACKAGES[(a & 0xFFFF, hi)])
         return PACKAGES[(a, hi)]
     except KeyError:
         raise KeyError(f"unknown install package id ({a:#x}, {hi:#x})") from None
@@ -57,7 +69,10 @@ class SuperBundle:
         self.path = toc_path
         self.root = game_root
         self.d = open(toc_path, 'rb').read()
-        h = [self.u32(i * 4) for i in range(HDR_FIELDS)]
+        # 15 header words in the game's own TOCs, 12 in ReSkate Studio mod TOCs: word 0 (the
+        # bundle hash map offset) is the header length either way.
+        self.hdr_fields = self.u32(0) // 4
+        h = [self.u32(i * 4) for i in range(self.hdr_fields)]
         (self.bundle_hashmap, self.bundle_data, self.bundles_count,
          self.chunk_hashmap, self.chunk_guids, self.chunks_count) = h[:6]
         self.hdr = h
@@ -69,9 +84,11 @@ class SuperBundle:
 
     def validate(self) -> None:
         """The arithmetic that proves the layout; cheap, so always on."""
-        assert self.bundle_hashmap == HDR_FIELDS * 4, self.bundle_hashmap
+        assert self.hdr_fields in (12, 15), self.bundle_hashmap
         # The bundle hashmap is sized for a perfect hash: nb slots in some TOCs, nb+1 in others.
         assert self.bundle_data >= self.bundle_hashmap + self.bundles_count * 4
+        if self.chunks_count == 0:           # Studio writes 0 for every chunk-table offset then
+            return
         assert self.chunk_hashmap == self.bundle_data + self.bundles_count * 16
         assert self.chunk_guids == self.chunk_hashmap + self.chunks_count * 4
         # chunk table: 20 B per chunk (16 B guid + u32 index)

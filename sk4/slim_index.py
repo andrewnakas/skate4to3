@@ -38,8 +38,12 @@ def main():
         print(f"  chunk_catalog.json cached: {len(cat):,}")
     else:
         _o = sb.package_name
-        sb.package_name = lambda a, hi: (_o(a, hi) if (a, hi) in sb.PACKAGES
-                                         else f"pkg_{a:04x}_{hi:04x}")
+        def _tol(a, hi, _f=_o):
+            try:
+                return _f(a, hi)
+            except KeyError:
+                return f"pkg_{a:04x}_{hi:04x}"
+        sb.package_name = _tol
         cat = {}
         for root, _, files in os.walk(os.path.join(GAME, 'Data')):
             for f in files:

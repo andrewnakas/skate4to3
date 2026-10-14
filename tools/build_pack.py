@@ -35,6 +35,7 @@ def main():
     ap.add_argument('arenas'); ap.add_argument('glb'); ap.add_argument('name')
     ap.add_argument('--tex-budget-mb', type=float, default=7.0)
     ap.add_argument('--out', default=None)
+    ap.add_argument('--shift', default=None, help='override the shift recorded in tiles.json')
     a = ap.parse_args()
     T = json.load(open(os.path.join(a.arenas, 'tiles.json')))
     meta = T['textures']
@@ -82,7 +83,9 @@ def main():
                 put(f'cTex_{x}_{z}_high', k, data)
             report.append(sum(size.values()))
     spawns = json.load(open(os.path.join(a.glb, 'd2s3_spawns.json')))
-    spots = [{'title': s['name'], 'pos': [s['x'], s['y'], s['z']], 'yaw': s.get('yaw', 0.0)} for s in spawns]
+    sh = [float(v) for v in a.shift.split(',')] if a.shift else T.get('shift', [0.0, 0.0, 0.0])
+    spots = [{'title': s['name'], 'pos': [s['x'] + sh[0], s['y'] + sh[1], s['z'] + sh[2]], 'yaw': s.get('yaw', 0.0)}
+             for s in spawns]
     json.dump({'cell': int(T['tile_size']), 'spots': spots}, open(os.path.join(stage, 'map.json'), 'w'), indent=1)
     print(f'staged {len(T["tiles"])} tiles; cTex per tile median {np.median(report) / 1e6:.1f} MB max {max(report) / 1e6:.1f} MB')
     cmd = [sys.executable, os.path.join(ROOT, 'tools', 'pack.py'), stage, a.name] + (['--out', a.out] if a.out else [])
