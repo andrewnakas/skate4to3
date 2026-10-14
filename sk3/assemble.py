@@ -142,8 +142,10 @@ class TextureSet:
         spec = tw.from_image(rgba, nid, h32('texarena', key), alpha=alpha)
         data = tw.build(spec)
         open(os.path.join(self.dir, f'{nid:016x}.arena'), 'wb').write(data)
+        Image.fromarray(rgba, 'RGBA').save(os.path.join(self.dir, f'{nid:016x}.png'))
         self.ids[key] = nid
-        self.meta[nid] = {'bytes': len(data), 'w': int(rgba.shape[1]), 'h': int(rgba.shape[0]), 'slot': slot}
+        self.meta[nid] = {'bytes': len(data), 'w': int(rgba.shape[1]), 'h': int(rgba.shape[0]), 'slot': slot,
+                          'alpha': alpha, 'default': png is None}
         return nid
 
 

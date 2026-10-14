@@ -133,8 +133,10 @@ mission manifests 1140, vault/bin/opt chunk streams 161 each.
   (none); file `<DIST[:12]>_[0x<64-bit id>].{loc,rx2}`. The .rx2 is a 3-object RW4 arena
   (eb0008 constant 16 bytes; eb0009 locator, layout in `Locator`; eb000b = constant table with the
   locator id at +0x1C and a second unidentified 64-bit word). Spawn i of 6 = position + 2 m along the
-  locator's x, -x, z, -z, x+z, -x-z columns (104/104 locators). Arena id (header 0x1C) and both
-  64-bit ids are not a hash we identified. The packs' arenas use a non-EA arena layout (dictionary
+  locator's x, -x, z, -z, x+z, -x-z columns (104/104 locators). The locator id (file name id and
+  eb000b +0x1C) = `attrib_key(<locator name>)` (see "Name hash" below); the arena id (header 0x1C,
+  32-bit) and eb000b's second 64-bit word are still unidentified (not lookup2 0xABCDEF00 / 0, nor
+  either half of the 64-bit hash, of any string or path in the pack). The packs' arenas use a non-EA arena layout (dictionary
   +4 = ptr, 16-aligned dictionary, longer subref tail); we write EA's.
 - Language table (little-endian): u32 0x00039000, u32 size-8, u32 count, u32 0x1C, u32 pool offset
   (from +8), name[16], count x {u32 hash, u32 pool offset} ascending by hash, pool of NUL-terminated
@@ -155,14 +157,28 @@ mission manifests 1140, vault/bin/opt chunk streams 161 each.
   .bin = StrE string chunk + EndC + data. Record = u64 key, u64 class key (challenge_local_data =
   0x46A56ADDF284C381 in 424/463 retail files), u64 parent, counts, layout pointer, layout keys,
   16-byte field entries {u64 key, u32 value, u16 type index, u16 flags (0x4000 inline)}.
-  Keys are 64-bit hashes of names whose function we did NOT identify: FNV-1/1a 64, lookup8 (levels
-  0, 0xABCDEF00, 0x11223344ABCDEF00, golden, both init orders, LE/BE words), lookup3 pairs,
-  lookup2 pairs, xxh64, murmur64A, CRC-64 variants and h*33 (64-bit) all fail on oracle pairs
-  (DepN file names, retail class/collection names from the *_summaryreport.txt files, the
-  schema's type names). Per-location vault content is a fixed pattern per location (4 records of
+  Keys are 64-bit name hashes, `sk3/attrib_hash.py` (see "Name hash" below).
+  Per-location vault content is a fixed pattern per location (4 records of
   0x140/0x40/0x60/0xC0 bytes in `dlc_<slug>_minimal.vlt`, one `challenge_local_data` file).
 - SUMMERCAMPHD's two builds have identical metadata, so the keys are deterministic.
 
+
+## Name hash (`sk3/attrib_hash.py`)
+- Function: Bob Jenkins' lookup8 `hash()` over the name's bytes (no case folding, no prefix, no
+  NUL): 24-byte blocks read as 3 little-endian u64, mix shifts 43/9/8/38/23/5/35/49/11/12/18/22,
+  c += length before the tail (tail bytes 16..22 go to c from bit 8), result c. Start state
+  a = b = 0xABCDEF0011223344, c = 0x9E3779B97F4A7C13.
+- Found in the retail .text (recomp's lifted C++, generated/skate3_recomp.70.cpp, block loop at
+  0x82B73B0C): lis/ori/rldimi build 0xABCDEF00'11223344 into a/b and 0x9E3779B9'7F4A7C13 into c;
+  r4 = length, divwu by 24, byte loads assembled little-endian. The earlier search missed it by
+  trying 0x11223344ABCDEF00 and golden in a/b. A sibling (skate3_recomp.71.cpp) is 32-bit lookup2
+  with initval 0xABCDEF00.
+- Verified (`tests/test_attrib_hash.py`): 1012/1012 DepN name/hash pairs from every retail vault in
+  db.big; challenge_local_data = 0x46A56ADDF284C381; every locator file id in the DLC packs
+  (36+36+20+36...) equals the hash of a locator name in its .loc/.rx2 (`Z_summercamp_spot8_Start`
+  -> 0xED172AC1DC8BC492, capitals kept). Over all retail vault strings, 6404 of 50008 hash to a
+  64-bit word present in the vault files (record/collection/field keys).
+- Still unknown: ExpN type word 0xAD303B8F42B3307E's name, the arena id, eb000b's second word.
 ## Generator (`dlc.build_files`, `tools/pack.py`)
 Generated from inputs: streams (raw form by default, EA form on request), all DIST manifests,
 the Sim location table, locator tables and arenas (positions, spawn rings, EA layout via
@@ -170,8 +186,8 @@ rw4_write), boundaries, neighbour tables (+ the dist_*dlc tables), preload lists
 manifests, language strings, histogram, unlocks, archive (data order + path directory), header.
 Taken from a template pack (default SUMMERCAMP, a single-world pack with 9 locations): the
 internal names (slug, DIST name, location keys), the 61 vault files verbatim, the locator ids and
-locator arenas' objects 0 and 2. Reason: vault keys (and the locator/arena ids) are hashes of those
-names whose function is unknown, so new names could not be keyed. Up to the template's location
+locator arenas' objects 0 and 2. Reason (historical): the key hash was unknown; it is now `sk3/attrib_hash.py`, so vault keys and
+locator ids can be derived from new names (the arena id is still unidentified). Up to the template's location
 count of spots; left-over locations reuse spot 0.
 Proof: SUMMERCAMP, ISLEOFGROM and SUMMERCAMPHD rebuilt from their own inputs (tiles, spot
 matrices, display name, CSPA content boxes, group/tail words) give byte-identical archives (146,
