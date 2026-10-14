@@ -24,6 +24,9 @@ scratch scripts work/scratch/rw4_survey.py, rw4_types.py, rw4_h6c.py) and then p
 `tests/test_rw4_roundtrip.py`: `rw4_write.build(spec_from_arena(parse(x))) == x` for every arena,
 where the spec holds only the arena id, the objects in dictionary order as (type id, align, data)
 and the subref records. Every rule below is therefore exact on all of them.
+The same round trip then passed on the three large worlds too (DownTown 25617, Industrial 14105,
+University 15176): 56215/56215 retail world arenas, so the two registries, the 0x6C pairing and every
+layout rule below also hold there (the counts quoted below are from the 1317 small-world arenas).
 
 File order: header 0xAC | section block | main objects | dictionary | subref records + runtime
 table | graphics region (base resources). The main region ends at h44; file length = h44 + h54.

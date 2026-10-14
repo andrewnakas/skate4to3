@@ -18,7 +18,7 @@ for f in chunk_catalog.json chunk_ranges.json global_assets.json global_chunks.j
 export SKATE_WORK=$W
 run collect $PY -I sk4/collect.py level "$LEVEL"
 run level_keys $PY -I sk4/level_keys.py
-run extract_depot_textures $PY -I sk4/extract_depot_textures.py
+run extract_depot_textures $PY -I sk4/extract_depot_textures.py ${EXTRACT_ARGS:-}
 run inherit_variants $PY -I sk4/inherit_variants.py
 run bind_by_name $PY -I sk4/bind_by_name.py
 run build_key_textures $PY -I sk4/build_key_textures.py
