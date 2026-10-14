@@ -104,7 +104,7 @@ def neighbour_table(centers, cell: int) -> StreamTiles:
                              abs(p[1] - c[1]) <= cell]) for c in S])
 
 
-def preload_list(center, centers, limit: int = 63) -> StreamTiles:
+def preload_list(center, centers, limit: int = int(os.environ.get("SK3_PRELOAD_LIMIT", "63"))) -> StreamTiles:
     """A location's preload list: the `limit` nearest tiles (the centre included), by distance,
     then x, then z (every location file in every pack measured)."""
     order = sorted(set(centers), key=lambda p: (math.hypot(p[0] - center[0], p[1] - center[1]),

@@ -50,15 +50,25 @@ history bundle D:\n64work\archive\skate4mapsconversionpipeline.bundle (+ .uncomm
   so assemble now splits (<= 48 meshes, ~750 KB, <= 8,000-vertex parts).
   Bisection packs (work/hyb): C0 (old tiles + our packager) OK, A (our collision) OK, B2 (our textures) OK.
 
-## Next (P5 quality)
-- colours: black/dark props and the orange paint ramps come out white/washed (tint path or layer pick) -
-  compare spots old vs new; check sk3 render material params (specular/lightmap defaults).
-- skater looked sunk in the old render with our collision (hybrid A) - recheck with our own render.
-- one cPres stream still ~8 MB (150_-50); decide the real stream limit from retail.
-- Isle of Grom end to end; then owner playtest; then P6 publish.
+- Isle of Grom built end to end (40 tiles, 390 MB) but CRASHES in game ~60 s after travelling to it.
+  The OLD pipeline's Isle of Grom pack crashes the same way, so it predates skate4to3.
+  Bisection (work/var, tools/variant_boot.sh): collision-only packs crash too; any 39 of the 40 tiles
+  load, all 40 crash (the full 2x2 block at the far corner 250..350 x 550..650 is needed) - preload
+  cap, texture budget, boundary, instance-free defer and heap quarantine do not help.
+  --skate3_heap_check=true reports a corrupt free-list link after "250 instance teardowns ran with
+  job(s) executing" = the recomp's own known WorldPresentation teardown race; faulting function
+  sub_82990768 (allocator). Needs engine-side debugging (owner's recomp) - see Owner decisions.
+- Rig incident (2026-10-14 ~09:10, fixed): a failed variant build made smoke_boot.sh run with an empty
+  pack path and wipe the rig's dlc/ folder; NEW_SAN_VAN (hard link to packs/fixed.big) and TESTPACK
+  (copied back from %APPDATA%\skate3\dlc\SKATE_2_DLC) restored; script now refuses empty/non-pack paths.
+
+## Next
+- P5 quality on Summer Camp: colours/tints vs skate. (owner eye), lightmap brightness, decals.
+- P6: push the private repo, final docs.
 
 ## Owner decisions pending
-- none
+- Isle of Grom crash: engine-side heap race in the recomp (old pack crashes too) - debug in the recomp, or ship Summer Camp first?
+- Summer Camp colours: whitish props / pale ramps vs the old pack's black/orange - which matches skate.?
 
 ## Notes
 - Studio CLI: "D:\ReSkate Studio\reskate_cli.exe"; game root "C:\Program Files (x86)\Steam\steamapps\common\Skate".
