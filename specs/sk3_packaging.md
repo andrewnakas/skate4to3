@@ -130,14 +130,21 @@ mission manifests 1140, vault/bin/opt chunk streams 161 each.
 - Mission manifests: 12 per location, constant bytes (group word 0x5634DD36 Pres, 0x5634DD26
   Sim/Tex; CMAP platform 3; every pack).
 - Locators: per location `freeskate_<slug>_<key>_locator` (6 spawns) and `Z_<slug>_<key>_Start`
-  (none); file `<DIST[:12]>_[0x<64-bit id>].{loc,rx2}`. The .rx2 is a 3-object RW4 arena
-  (eb0008 constant 16 bytes; eb0009 locator, layout in `Locator`; eb000b = constant table with the
-  locator id at +0x1C and a second unidentified 64-bit word). Spawn i of 6 = position + 2 m along the
-  locator's x, -x, z, -z, x+z, -x-z columns (104/104 locators). The locator id (file name id and
-  eb000b +0x1C) = `attrib_key(<locator name>)` (see "Name hash" below); the arena id (header 0x1C,
-  32-bit) and eb000b's second 64-bit word are still unidentified (not lookup2 0xABCDEF00 / 0, nor
-  either half of the 64-bit hash, of any string or path in the pack). The packs' arenas use a non-EA arena layout (dictionary
-  +4 = ptr, 16-aligned dictionary, longer subref tail); we write EA's.
+  (none); file `<DIST[:12]>_[0x<attrib_key(name)>].{loc,rx2}`. The .rx2 is a 3-object RW4 arena,
+  one subref (object 1, +0x20): eb0008 = 00000019 0000000D + 8 zero bytes (190/190); eb0009 locator
+  (layout in `Locator`; +0x90 = attrib_key(name)); eb000b = import/export table {2, 0x14, 0x44, 25,
+  0x44}, import {0, 0xFEFFFFFF, attrib_key(name), 0xEB0068, 0x00800000}, export {0, 0xFEFFFFFF,
+  export id, 0xEB0009, 1}, then the 25 cSim table types with count 2 (190/190 equal but for the two
+  ids). Spawn i of 6 = position + 2 m along the locator's x, -x, z, -z, x+z, -x-z columns (104/104).
+  The export id and the arena id (header 0x1C) are not hashes of any name or path tried (lookup8,
+  lookup2, FNV-1/1a 32/64, CRC32 over names, file stems, paths) and occur nowhere outside their own
+  arena (all pack bytes searched); retail global locators (content/global_locators, 23 arenas) use
+  unrelated ids too (file id != attrib_key(name) there). Generated arenas therefore take their own:
+  arena id = attrib_key(name + '.arena') & 0xFFFFFFFF, export id = attrib_key(name + '.export')
+  (`dlc.locator_own_ids`). Built from first principles (`dlc.build_locator_arena`), every pack
+  locator equals the old template-based build byte for byte given its two ids (190/190). The packs'
+  arenas use a non-EA arena layout (dictionary +4 = ptr, 16-aligned dictionary, longer subref
+  tail); we write EA's.
 - Language table (little-endian): u32 0x00039000, u32 size-8, u32 count, u32 0x1C, u32 pool offset
   (from +8), name[16], count x {u32 hash, u32 pool offset} ascending by hash, pool of NUL-terminated
   texts (deduplicated, first-use order), padded to 4. Key = h=0xFFFFFFFF; h=h*33+byte over the
@@ -149,18 +156,108 @@ mission manifests 1140, vault/bin/opt chunk streams 161 each.
   (raw ASCII texts); retail English: 271 entries.
 - Unlocks: `<slug>.unlock` empty (or a WORLDS list in SAN VANELONA);
   `<slug>0000_product00000000.unlock` = "DLC_PRODUCT," + upper(slug) zero-padded to 16 (+ LF).
-- Vaults (.vlt): chunks Vers, StrN, DepN, DatN, ExpN, PtrN, EndC (u32 tag, u32 size incl. head).
-  DepN = u64 count, u64 hashes, u32 name offsets, names (the .vlt/.bin file names). ExpN = u64
-  count, {u64 key, u64 type 0xAD303B8F42B3307E, u32 size, u32 file offset of the DatN record}.
-  PtrN = 16-byte entries {u32 offset, u16 kind, u16 arg, u64 target}: kind 2 selects the section
-  (arg 0 = the .vlt, 1 = the .bin), kind 3 = pointer slot at `offset` -> .bin offset `target`.
-  .bin = StrE string chunk + EndC + data. Record = u64 key, u64 class key (challenge_local_data =
-  0x46A56ADDF284C381 in 424/463 retail files), u64 parent, counts, layout pointer, layout keys,
-  16-byte field entries {u64 key, u32 value, u16 type index, u16 flags (0x4000 inline)}.
-  Keys are 64-bit name hashes, `sk3/attrib_hash.py` (see "Name hash" below).
-  Per-location vault content is a fixed pattern per location (4 records of
-  0x140/0x40/0x60/0xC0 bytes in `dlc_<slug>_minimal.vlt`, one `challenge_local_data` file).
-- SUMMERCAMPHD's two builds have identical metadata, so the keys are deterministic.
+- Vaults: see "Vaults (AttribSys)" below. SUMMERCAMPHD's two builds have identical metadata, so
+  the keys are deterministic.
+
+
+## Vaults (AttribSys) (`sk3/vault.py`, `tests/test_vault.py`)
+Corpus: retail db.big (509 .vlt/.bin, 3 .opt, 509 summary reports naming the collections) and
+the 161 vault triples of the 6 packs. Measured with `work/vault/*.py` (scratch) and the tests.
+
+File codec (byte-exact: 670/670 .vlt, 670/670 .bin, 164/164 .opt):
+- .vlt = chunks Vers, StrN, DepN, DatN, ExpN, PtrN, EndC; u32 tag, u32 size incl. the head; every
+  chunk padded with zeros to a multiple of 16. Vers = u64: 0x693CDCC3F57ADB28 in all 161 pack
+  vaults, 0xB2157AD88EF77187 in 505/509 retail (3 other values in 4). StrN = 8 zero bytes (670/670).
+  EndC = 8 zero bytes. DepN = u64 n, u64 hashes[n] = attrib_key(file name), u32 name offsets[n]
+  padded to 8, NUL-terminated names (the vault's own .vlt and .bin names). DatN = the export records
+  back to back, in ExpN order. ExpN = u64 n, n x {u64 id, u64 type, u32 size, u32 file offset};
+  types: 0xAD303B8F42B3307E collection (14319 retail, 1248 pack), 0x2A7895AC4A876152 class (329)
+  and 0x0B38846845E9C175 database (1), both only in skaterschema.vlt. PtrN = 16-byte entries
+  {u32 offset, u16 kind, u16 arg, u64 target}: kind 2 = section (arg 1: the slots that follow are
+  in the .bin, arg 0: in the .vlt); kind 3 arg 1 = slot at offset -> .bin offset target; kind 0 ends.
+- .bin = StrE chunk, EndC chunk, then (EA) the data area. Community builders put everything into
+  StrE and end at EndC. .opt = EndC only (16 bytes).
+- Export id of a collection = attrib_key('<class name>/<collection name>'): 14319/14319 retail
+  exports (names from the summary reports and .bin strings) and 1103/1103 named pack exports.
+
+Schema (retail skaterschema.vlt/.bin, `read_schema`):
+- Database record: u32 0x202, u32 0xC04, u32 type count (711), u32 0, u32 type sizes[711]; its
+  pointer at +0x0C leads to the 711 type names (NUL-separated, same order); type key =
+  attrib_key(type name) (all collection type keys of all vaults resolve).
+- Class record (0x28): u64 key, u32 (unidentified), u32 field count, u32 -> field table, 0, 0,
+  u32 layout size, u32 static field count, 0. Field = 24 bytes {u64 key, u64 type, u16 layout
+  offset, u16 size, u16 max count (1, n, 0xFFFF), u8 flags, u8 log2 alignment}, ascending by key;
+  flags 0x01 array, 0x02 static (in the layout), 0x20 complex type. Class names: every class
+  has a type `Attrib::Gen::ClassRefSpec_<name>` (329/329; plus challenge_local_data).
+  challenge_local_data: layout 4 bytes (one static eSk8Characters), 314 fields.
+
+Collection record (all 14319 + 1248):
+- +0 u64 key = attrib_key(name), +8 class key, +0x10 parent key (0 = none), +0x18 u32 capacity
+  (= entry count, 14319/14319, 1248/1248), +0x1C u32 w1c (0..4; meaning unidentified - not a
+  modulo/probe statistic of the keys we tried; identical content carries 0 in retail and 1..2 in the
+  packs, so the generator writes the packs' value per collection), +0x20 u32 entry count, +0x24 u16
+  used type count, +0x26 u16 stored type count, +0x28 u32 layout pointer (PtrN slot; EA stores 0,
+  packs the .bin offset), +0x2C 0, +0x30 u64 type keys, then entries 16 B {u64 field key, u32
+  value, u16 type index, u16 flags}.
+- Type list = the class's static-field types in layout-offset order, then the entry types in
+  first-use order; EA pads it with a zero key to an even count (14224/14319 retail; the packs do not
+  pad). Entry order is the source order (no hash-table rule found: < 18% of keys at key % n).
+- Entry flags: 0x4000 inline (value word; a Text / tLocationID value is a PtrN slot to a string),
+  0x0800 complex (schema flag 0x20), 0x0200 array (schema 0x01). Without 0x4000 the value is a PtrN
+  slot to a data block of the field's size, or for arrays an 8-byte header {u16 count, u16 capacity,
+  u16 element size, 0} followed by the elements.
+- EA's layout (`encode`, 474/508 retail vaults re-encode byte for byte from the decoded content):
+  StrE = every string once in first-use order (collections in record order: layout slots, then entry
+  by entry), chunk padded to 16; data area after EndC: per collection its layout (aligned to its
+  largest static field alignment) then its out-of-line values in entry order, each aligned to the
+  field's alignment; pointer slots store 0. PtrN: section 1 (only when there are .bin slots or a
+  complex entry) sorted by (slot offset inside its array element / block, address), then section 0
+  sorted by (slot offset inside its record, address). The other 34 retail vaults (stategraphs,
+  skatercollections, challengebanks/main, ...) have .bin slots pointing at data blocks (nested
+  structures); `decode` refuses them rather than mis-read them.
+- Community builders' layout (all 6 packs): data inside StrE, unaligned, identical blocks shared,
+  slots store their target offset, types unpadded, and three struct sizes too small
+  (tHighlightDefinition 0x70 of 0x90, tObjectiveDefinition 0x10 of 0x14, tVaultedRefSpec 0x18 of
+  0x20: the game reads the next bytes) and 4 values per pack pointing at .bin offset 0 (the StrE
+  head; `BIN0`). The decoder resolves what the game reads, so content compares across layouts.
+
+DLC content (single-world packs; SUMMERCAMP, ISLEOFGROM, SUMMERCAMPHD, every name resolved by hash
+except one): names derive from slug S, s4 = S[:4], keys K (K[0] main), DIST D.
+- 61 files = 20 vault triples + `dlc_<S>_minimal.vaultlist.xml` (CRLF; lists dlc_<S>_minimal,
+  dlc_<s4>_local_data_framework, challengebanks\dlc_<s4>, progressionbanks\dlc_<s4>; the
+  challenge_local_data vaults are reached through tVaultedRefSpecs). 3 x (11 + len(K)) + 1 in general.
+- challenge_local_data/dlc_<s4>_freeskate_{activities, activities_<gap_tag|accumulation|simultrick|
+  tricklist|survival>, locations}.vlt: each holds only a copy of retail challenge_local_data
+  'default' (45 entries, equal to retail's).
+- challenge_local_data/freeskate_dlc_<S>_<K>.vlt: one empty collection per location, parent
+  dlc_<s4>_freeskate_locations.
+- dlc_<s4>_local_data_framework.vlt: challenge_local_data dlc_<s4>, dlc_<s4>_freeskate_locations,
+  dlc_<s4>_freeskate_activities(+5) = retail's freeskate_* collections renamed.
+- challengebanks/dlc_<s4>.vlt: challenges + challenge_objective 'default' copies; challenges /
+  global data / failure objective / objective / objectives group dlc_<s4>; challenges + global data
+  for dlc_<s4>_freeskate_locations, _activities (+5 activities with failure objectives); per
+  location challenges + global data freeskate_dlc_<S>_<K> (locator freeskate_<S>_<K>_locator, texts
+  ID_MAP_LOCATION_DESC_/ID_LOCATION_<S>_<K>, world ref dist_<S>_<K>dlc).
+- progressionbanks/dlc_<s4>.vlt: 6 'default' copies, dlc_<s4> state/handler/rewards/stategraph/
+  action/group, rewards dlc_<s4>_challenges, dlc_<s4>_ots_unlock, dlc_<s4>_milestones and one
+  milestone reward whose name is NOT known (keys 0xAA86FA1E66596509 summ, 0xC84467CE580C5F5D isle;
+  ~50 M candidate names tried; referenced only as a parent link inside its own vault). The generator
+  names it `dlc_<s4>_milestone_01`.
+- dlc_<S>_minimal.vlt: per location world / worldpainter_fe_location_triggers / aud_worlddata /
+  aud_bigfiles 'dist_<S>_<K>dlc' (texts D, s4, world<D>.big, ID_WORLD_<S>_<K>; constant tMapInfo
+  'map1024' {0x802, -850, 1050, -1250, 512, 512}; 4 constant world RefSpecs), map_category <S>dlc,
+  <S>dlc_maps, fe_locations per location (layout = dist_<S>_<K>dlc, Z_<S>_<K>_Start,
+  ID_LOCATION_<S>_<K>), map_filter <S>dlc and freeskate_locations_<S>dlc (Lua filter source listing
+  every dist_<S>_<K>dlc; tCompiledLua = {ptr source, ptr '', u32 source length}), map_listing
+  progression_locations_dlc_<S> and online_freeskate_<S>dlc, dlc_mapping pack_<S> (product text =
+  upper alphanumerics of S, first 7, padded with '0' to 16: 6/6 packs), progression_summary_group
+  dlc_<S> and <S>_<K>_dlc per location (ID_DLC_<S>_<K>_SUMMARY_TITLE).
+- Nothing depends on spawn positions; everything else is constant across the three packs.
+- Generator (`vault.dlc_vaults(slug, keys, dist)`): emits all 61 files in EA's layout with the packs'
+  content (their 3 short structs' trailing bytes and their 4 BIN0 values included, so the game reads
+  the same values). Result (`test_generated_vaults_match_pack`): .opt and vault list byte-equal,
+  19/20 vaults with identical decoded content, the 20th (progressionbanks) identical except the
+  milestone reward's key and export id.
 
 
 ## Name hash (`sk3/attrib_hash.py`)
@@ -178,21 +275,30 @@ mission manifests 1140, vault/bin/opt chunk streams 161 each.
   (36+36+20+36...) equals the hash of a locator name in its .loc/.rx2 (`Z_summercamp_spot8_Start`
   -> 0xED172AC1DC8BC492, capitals kept). Over all retail vault strings, 6404 of 50008 hash to a
   64-bit word present in the vault files (record/collection/field keys).
-- Still unknown: ExpN type word 0xAD303B8F42B3307E's name, the arena id, eb000b's second word.
+- Still unknown: the names of the ExpN type words, the locator arenas' arena / export ids (own ids
+  generated, see Locators), one milestone reward collection name (see Vaults).
 ## Generator (`dlc.build_files`, `tools/pack.py`)
-Generated from inputs: streams (raw form by default, EA form on request), all DIST manifests,
-the Sim location table, locator tables and arenas (positions, spawn rings, EA layout via
-rw4_write), boundaries, neighbour tables (+ the dist_*dlc tables), preload lists, mission
-manifests, language strings, histogram, unlocks, archive (data order + path directory), header.
-Taken from a template pack (default SUMMERCAMP, a single-world pack with 9 locations): the
-internal names (slug, DIST name, location keys), the 61 vault files verbatim, the locator ids and
-locator arenas' objects 0 and 2. Reason (historical): the key hash was unknown; it is now `sk3/attrib_hash.py`, so vault keys and
-locator ids can be derived from new names (the arena id is still unidentified). Up to the template's location
-count of spots; left-over locations reuse spot 0.
-Proof: SUMMERCAMP, ISLEOFGROM and SUMMERCAMPHD rebuilt from their own inputs (tiles, spot
-matrices, display name, CSPA content boxes, group/tail words) give byte-identical archives (146,
-158, 332 MB), with the packs' own locator .rx2 bytes swapped in where our EA-layout arena decodes
-to the same objects (`test_whole_pack_regenerates_byte_exact`).
+Template-free (default): everything is generated from the inputs (tiles, spots, display name,
+optional CSPA content boxes) and the internal names (`PackNames`: slug, DIST name, location keys;
+defaults slug = display letters/digits lower-cased, DIST_<CamelCaseName>, keys = slug, spot1, ...;
+`--slug`, `--dist`, map.json "slug"/"dist"/per-spot "key"): streams (raw form by default, EA form on
+request), all DIST manifests, the Sim location table, locator tables and arenas (ids from names,
+first-principles objects, EA layout via rw4_write), boundaries, neighbour tables (+ the dist_*dlc
+tables), preload lists, mission manifests, language strings, histogram, unlocks, the 3 x (11 + N)
++ 1 vault files (`vault.dlc_vaults`), archive (data order + path directory), header. One location
+per spot, any count.
+Optional `--template [PACK.big]` (off by default): names, the 61 vault files and the locator arenas'
+objects 0/2 and ids taken from a working pack (the pre-hash behaviour, kept for comparison).
+Proof (`tests/test_dlc.py`), SUMMERCAMP, ISLEOFGROM and SUMMERCAMPHD rebuilt from their own exported
+inputs (tiles, spot matrices, display name, CSPA content boxes, group/tail words, internal names)
+with no template: 415/415, 323/323, 415/415 files present; streams, DIST manifests, location table,
+locator tables, boundaries, preload lists, neighbour tables, missions, language, histogram, unlocks,
+.opt and vault list byte-identical; 19/20 vaults with identical decoded content and the 20th equal
+but for the milestone collection's key/export id; the 18 locator arenas with identical objects but
+for our export id (and our arena id). With the packs' own bytes swapped in for those vault and
+locator files the whole archives are identical to the shipped ones (146, 158, 332 MB;
+`test_template_free_rebuild`). The template path still rebuilds SUMMERCAMP byte for byte
+(`test_whole_pack_regenerates_byte_exact_with_template`).
 
 ## The recomp's loader (owner's `skate3_dlc_picker.cpp`)
 - Search: `dlc/` beside the exe, under the game data root, the user data root, or

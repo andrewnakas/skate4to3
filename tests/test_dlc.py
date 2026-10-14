@@ -73,79 +73,175 @@ def test_string_id_hash():
     assert dlc.string_id('dist_summercamp_spot1dlc') == 0xEDD88055
 
 
-def rebuild(path):
-    tpl = dlc.read_template(path)
-    display, tiles, spots, cell, group, tail, _content = dlc.inputs_of_pack(path, tpl)
-    files = dlc.build_files(display, tiles, spots, tpl, cell=cell, center_rule='community',
-                            group=group, tail=tail)
+DB = os.path.join(os.environ.get('SK3_DATA', r'C:\dev\skate3recomp\out\build\windows-release\game\data'),
+                  'big', 'db.big')
+GENERATED = ('summercamp', 'isleofgrom', 'summercamphd')    # the single-world packs on this machine
+
+
+def pack_named(slug):
+    return next((p for p in SMALL if os.path.basename(p).lower() == f'{slug}_00000000.big'), None)
+
+
+def regenerate(path, template=False):
+    """A pack rebuilt from its own exported inputs (tiles, spots, display name, CSPA content boxes,
+    group / tail words, internal names): template-free, or with the pack itself as the template."""
+    pn = dlc.names_of_pack(path)
+    names = dlc.read_template(path) if template else pn
+    display, tiles, spots, cell, group, tail, content = dlc.inputs_of_pack(path, pn)
+    return dlc.build_files(display, tiles, spots, names, cell=cell, center_rule='community', group=group,
+                           tail=tail, content=content, dlc_tables=False)
+
+
+def compare(path, files, sch=None):
+    """Per file: 'bytes' (identical) or what differs and why, by category. Vault files compare by
+    decoded content (our writer uses EA's layout, the packs a community builder's), locator arenas
+    by object (EA arena layout vs the packs' builder's; template-free arenas carry their own arena
+    and export ids). Returns (counts, unexplained differences, {path: pack bytes} for the files
+    whose content is the same, to compare the whole archive)."""
+    from sk3 import vault as V
     a = big.read(path)
-    orig = {e.path: e for e in a.entries}
-    res = collections.Counter()
-    diff = collections.defaultdict(list)
-    for p, e in orig.items():
+    orig = {e.path: a.read(e) for e in a.entries}
+    res, bad, swap = collections.Counter(), collections.defaultdict(list), {}
+    for p in sorted(set(orig) | set(files)):
         c = dlc.category(p)
-        if p not in files:
-            res[(c, 'missing')] += 1
-            diff[c].append(p)
+        if p not in files or p not in orig:
+            res[(c, 'missing' if p not in files else 'extra')] += 1
+            bad[c].append(p)
             continue
-        d = a.read(e)
-        if c == 'locator arena':
-            same = [o.data for o in rw4.parse(files[p]).objects] == [o.data for o in rw4.parse(d).objects]
-        elif c == 'DIST manifest' and p.endswith('.xss'):
-            same = [x.asset_id for x in mf.read_cspa(files[p]).cells] == [x.asset_id for x in mf.read_cspa(d).cells]
+        o, g = orig[p], files[p]
+        if o == g:
+            res[(c, 'bytes')] += 1
+        elif p.startswith('data/db/') and p.endswith('.bin'):
+            continue                                        # judged with its .vlt
+        elif p.startswith('data/db/') and p.endswith('.vlt') and sch is not None:
+            d = V.semantic_diff((o, orig[p[:-4] + '.bin']), (g, files[p[:-4] + '.bin']), sch)
+            if not d:
+                v = 'same content'
+            elif len({x[0] for x in d}) == 1 and sorted(x[1] for x in d) == ['eid', 'key']:
+                v = 'same content, milestone collection name ours'
+            else:
+                v = None
+            if v:
+                res[(c, v)] += 1
+                swap[p], swap[p[:-4] + '.bin'] = o, orig[p[:-4] + '.bin']
+            else:
+                res[(c, 'differs')] += 1
+                bad[c].append((p, d[:2]))
+        elif p.endswith('.rx2'):
+            ao, ag = rw4.parse(o).objects, rw4.parse(g).objects
+            if [x.data for x in ao] == [x.data for x in ag]:
+                v = 'same objects'
+            elif (len(ao) == len(ag) == 3 and ao[0].data == ag[0].data and ao[1].data == ag[1].data and
+                  ao[2].data[:0x34] + ao[2].data[0x3C:] == ag[2].data[:0x34] + ag[2].data[0x3C:]):
+                v = 'same objects, export id ours'
+            else:
+                v = None
+            res[(c, v or 'differs')] += 1
+            if v:
+                swap[p] = o
+            else:
+                bad[c].append(p)
         else:
-            same = files[p] == d
-        res[(c, 'same' if same else 'differs')] += 1
-        if not same:
-            diff[c].append(p)
-    for p in files:
-        if p not in orig:
-            res[(dlc.category(p), 'extra')] += 1
-    return res, diff
+            res[(c, 'differs')] += 1
+            bad[c].append(p)
+    return res, dict(bad), swap
 
 
-@pytest.mark.skipif(not SMALL, reason='no DLC packs')
-def test_rebuild_matches_pack():
-    """SummerCamp rebuilt from its own inputs: every file present and equal, except the
-    documented differences (EA-layout locator arenas compare by object; CSPA cells by id; the
-    added dist_*dlc tables)."""
-    p = next(p for p in SMALL if os.path.basename(p).startswith('summercamp_'))
-    res, diff = rebuild(p)
-    differs = {c: v for c, v in diff.items()}
-    assert not differs, {c: v[:3] for c, v in differs.items()}
-
-
-def test_whole_pack_regenerates_byte_exact():
-    """SummerCamp from its inputs (tiles, spots, display name, CSPA content boxes, group words)
-    plus its vaults and locator ids: the whole .big comes out identical to the shipped one."""
+def whole_pack(path, files, swap):
+    """The archive written from `files` with the pack's own bytes swapped in where the content is
+    the same: equal to the shipped .big byte for byte?"""
     from test_big import Compare
-    p = next((p for p in SMALL if os.path.basename(p).startswith('summercamp_')), None)
-    if not p:
-        pytest.skip('no SummerCamp pack')
-    ok, at = whole_pack(p)
+    files = dict(files, **swap)
+    sink = Compare(path)
+    big.write(sink, [big.Source(*k.rsplit('/', 1), data=v) for k, v in files.items()], big.FLAGS_DLC)
+    return sink.done(), sink.first_diff
+
+
+def schema():
+    from sk3 import vault as V
+    return V.load_schema(DB) if os.path.exists(DB) else None
+
+
+@pytest.mark.parametrize('slug', GENERATED)
+def test_template_free_rebuild(slug):
+    """The pack from its own inputs with no template: every file present; vaults with the same
+    decoded content (one collection name of ours), locator arenas with the same objects (our export
+    id), everything else byte for byte; with the pack's bytes swapped in for those, the whole .big
+    is the shipped one byte for byte."""
+    p = pack_named(slug)
+    if not p or not os.path.exists(DB):
+        pytest.skip('pack or retail db.big not on this machine')
+    files = regenerate(p)
+    res, bad, swap = compare(p, files, schema())
+    assert not bad, {c: v[:3] for c, v in bad.items()}
+    assert res[('vault', 'same content, milestone collection name ours')] == 1
+    assert res[('locator arena', 'same objects, export id ours')] == 18
+    ok, at = whole_pack(p, files, swap)
     assert ok, f'first difference at {at}'
 
 
-def whole_pack(p):
-    from test_big import Compare
-    tpl = dlc.read_template(p)
-    display, tiles, spots, cell, group, tail, content = dlc.inputs_of_pack(p, tpl)
-    files = dlc.build_files(display, tiles, spots, tpl, cell=cell, center_rule='community',
-                            group=group, tail=tail, content=content, dlc_tables=False)
-    # our locator arenas use EA's arena layout; the packs use another builder's (dictionary +4 =
-    # ptr, dictionary 16-aligned, longer subref tail). Where the decoded objects are equal, put
-    # the pack's own bytes back so the rest of the archive is compared byte for byte.
-    a = big.read(p)
-    orig = {e.path: e for e in a.entries}
-    swapped = 0
-    for k in [k for k in files if k.endswith('.rx2')]:
-        o = a.read(orig[k])
-        if [x.data for x in rw4.parse(o).objects] == [x.data for x in rw4.parse(files[k]).objects]:
-            files[k] = o
-            swapped += 1
-    sink = Compare(p)
-    big.write(sink, [big.Source(*k.rsplit('/', 1), data=v) for k, v in files.items()], big.FLAGS_DLC)
-    return sink.done(), sink.first_diff
+def test_whole_pack_regenerates_byte_exact_with_template():
+    """SummerCamp from its inputs with itself as the template (its vault files and locator
+    arenas): the whole .big comes out identical to the shipped one (EA-layout locator arenas
+    swapped for the pack's own where the objects are equal)."""
+    p = pack_named('summercamp')
+    if not p:
+        pytest.skip('no SummerCamp pack')
+    files = regenerate(p, template=True)
+    res, bad, swap = compare(p, files)
+    assert not bad, {c: v[:3] for c, v in bad.items()}
+    ok, at = whole_pack(p, files, swap)
+    assert ok, f'first difference at {at}'
+
+
+def test_locator_arenas_from_first_principles():
+    """Every pack locator arena (190): built from its decoded locator and its two own ids alone,
+    it equals the template-based build byte for byte, and its file id is attrib_key(name)."""
+    import struct
+    from sk3 import rw4_write
+    from sk3.attrib_hash import attrib_key
+    if not PACKS:
+        pytest.skip('no packs')
+    n = 0
+    for path in PACKS:
+        a = big.read(path)
+        for e in a.entries:
+            if e.path.startswith('data/content/global_locators/') and e.path.endswith('.rx2'):
+                d = a.read(e)
+                ar = rw4.parse(d)
+                L = dlc.parse_locator_object(ar.objects[1].data)
+                aid = rw4_write.spec_from_arena(ar).arena_id
+                exp = struct.unpack_from('>Q', ar.objects[2].data, 0x34)[0]
+                assert dlc.build_locator_arena(L, aid, exp) == dlc.locator_arena(d, L), e.path
+                assert ar.objects[0].data == dlc.LOCATOR_HEAD
+                assert ar.objects[2].data == dlc.locator_table(L.locator_id, exp)
+                assert e.name == dlc.locator_file_stem(e.root.rsplit('/', 1)[1], L.name) + '.rx2'
+                assert L.locator_id == attrib_key(L.name)
+                n += 1
+    assert n >= 190
+
+
+def test_default_names():
+    spots = [dlc.Spot('Main', (0, 0, 0))] + [dlc.Spot(f'S{i}', (0, 0, 0)) for i in range(1, 4)]
+    n = dlc.names_for('Summer Camp', spots)
+    assert (n.slug, n.dist, n.keys) == ('summercamp', 'DIST_SummerCamp', ['summercamp', 'spot1', 'spot2', 'spot3'])
+    spots[2].key = 'rail8'
+    assert dlc.names_for('Isle of Grom', spots, slug='isleofgrom').keys[2] == 'rail8'
+
+
+def test_template_free_build_any_location_count():
+    """A map with 12 locations and no tiles: per location a locator pair, boundary, preload list,
+    12 mission manifests and a challenge_local_data vault; nothing taken from a pack."""
+    arena = dlc.build_locator_arena(dlc.Locator('x', tuple(float(i % 5 == 0) for i in range(16)), 1))
+    tiles = {'Pres': [], 'Tex': [], 'Sim': [(f'cSim_{x}_{z}_high', [(0x1000 + x + z, arena)])
+                                          for x in (-50, 50) for z in (-50, 50)]}
+    spots = [dlc.Spot(f'Spot {i}', (10.0 * i, 0.0, 5.0)) for i in range(12)]
+    files = dlc.build_files('My Map', tiles, spots, dlc.names_for('My Map', spots))
+    cats = collections.Counter(dlc.category(p) for p in files)
+    assert cats['locator arena'] == cats['locator table'] == 24
+    assert cats['boundary'] == cats['location preload list'] == 12
+    assert cats['vault'] == cats['vault data'] == cats['vault options'] == 11 + 12
+    assert cats['mission manifest (empty)'] == 12 * 12
 
 
 if __name__ == '__main__':
@@ -155,13 +251,12 @@ if __name__ == '__main__':
         tot.update(r)
         print(os.path.basename(p), sum(v for (c, ok), v in r.items() if ok), '/', sum(r.values()), bad[:2])
     print('CODECS', sorted(tot.items()))
-    for p in SMALL:
-        try:
-            r, diff = rebuild(p)
-        except ValueError as ex:
-            print('REBUILD', os.path.basename(p), 'skipped:', ex)
+    sch = schema()
+    for slug in GENERATED:
+        p = pack_named(slug)
+        if not p:
             continue
-        print('REBUILD', os.path.basename(p), sorted(r.items()))
-        print('WHOLE PACK byte-exact', os.path.basename(p), whole_pack(p))
-        for c, v in diff.items():
-            print('   ', c, len(v), v[:2])
+        files = regenerate(p)
+        res, bad, swap = compare(p, files, sch)
+        print('TEMPLATE-FREE', slug, sorted(res.items()))
+        print('   whole .big (same-content files swapped):', whole_pack(p, files, swap), 'unexplained:', bad)

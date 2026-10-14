@@ -1,20 +1,27 @@
 """Build an installable Skate 3 DLC pack folder from per-tile arenas.
 
-    python tools/pack.py <tiles dir> <display name> [--out DIR] [--template PACK.big]
-                         [--content-id ID] [--ea-streams] [--community-centres]
+    python tools/pack.py <tiles dir> <display name> [--out DIR] [--slug S] [--dist DIST_Name]
+                         [--content-id ID] [--ea-streams] [--community-centres] [--template [PACK.big]]
     python tools/pack.py --export <pack.big> <tiles dir>      # tiles dir from a working pack
 
 Tiles dir:
     map.json        {"cell": 100,
-                     "spots": [{"title": "Main", "pos": [x, y, z], "yaw": 0}, ...],
-                     "content": {"cSim_50_50_high": [minx, miny, minz, maxx, maxy, maxz], ...}}
-                    spots[0] is the main location; "content" (CSPA content boxes) is optional.
+                     "spots": [{"title": "Main", "pos": [x, y, z], "yaw": 0, "key": "..."}, ...],
+                     "content": {"cSim_50_50_high": [minx, miny, minz, maxx, maxy, maxz], ...},
+                     "slug": "...", "dist": "DIST_..."}
+                    spots[0] is the main location, one location per spot (no limit); "key",
+                    "content", "slug" and "dist" are optional (defaults: slug = the display
+                    name's letters/digits lower-cased, dist = DIST_<CamelCaseName>, keys = slug,
+                    spot1, spot2, ...). --slug / --dist override map.json.
     c<Kind>_<x>_<z>_high/<NNN>_<asset id hex>.rx2   (Kind = Pres | Sim | Tex; NNN orders the
     c<Kind>_Global/<NNN>_<asset id hex>.rx2           chunks inside the stream)
 
 Output: <out>/<CONTENTID>/<slug>_00000000.big and .header (content id = folder name). Copy the
-folder into the recomp's dlc/ directory. The pack keeps the template's internal names and vaults
-(specs/sk3_packaging.md "Generator"); it is for personal use only - never commit or publish it.
+folder into the recomp's dlc/ directory. Every file is generated from the inputs and names,
+including the AttribSys vaults and locator ids (specs/sk3_packaging.md "Generator"). --template
+(off by default) instead takes the internal names, vault files and locator arenas from a working
+pack (SUMMERCAMP when no path is given). The pack is for personal use only - never commit or
+publish it.
 """
 from __future__ import annotations
 
@@ -60,9 +67,9 @@ def load_tiles(d: str):
 
 
 def export(pack: str, out: str):
-    """Write a working pack's tiles + map.json (the generator's inputs) to a tiles dir."""
-    tpl = dlc.read_template(pack)
-    display, tiles, spots, cell, _group, _tail, content = dlc.inputs_of_pack(pack, tpl)
+    """Write a working pack's tiles + map.json (the generator's inputs, names included)."""
+    names = dlc.names_of_pack(pack)
+    display, tiles, spots, cell, _group, _tail, content = dlc.inputs_of_pack(pack, names)
     for kind, tl in tiles.items():
         for name, arenas in tl:
             p = os.path.join(out, name)
@@ -70,8 +77,8 @@ def export(pack: str, out: str):
             for i, (aid, ar) in enumerate(arenas):
                 with open(os.path.join(p, f'{i:03d}_{aid:016x}.rx2'), 'wb') as f:
                     f.write(ar)
-    js = {'display': display, 'cell': cell,
-          'spots': [{'title': s.title, 'pos': list(s.pos), 'yaw': s.yaw, 'matrix': list(s.matrix)}
+    js = {'display': display, 'cell': cell, 'slug': names.slug, 'dist': names.dist,
+          'spots': [{'title': s.title, 'pos': list(s.pos), 'yaw': s.yaw, 'matrix': list(s.matrix), 'key': s.key}
                     for s in spots],
           'content': {k: list(v) for k, v in content.items()}}
     with open(os.path.join(out, 'map.json'), 'w') as f:
@@ -84,7 +91,10 @@ def main():
     ap.add_argument('tiles', nargs='?')
     ap.add_argument('name', nargs='?')
     ap.add_argument('--out', default=os.path.join(ROOT, 'out', 'packs'))
-    ap.add_argument('--template')
+    ap.add_argument('--template', nargs='?', const='', default=None,
+                    help='take names, vaults and locator arenas from a working pack (default off)')
+    ap.add_argument('--slug', help='pack slug (default: map.json "slug", else from the name)')
+    ap.add_argument('--dist', help='DIST name (default: map.json "dist", else DIST_<Name>)')
     ap.add_argument('--content-id')
     ap.add_argument('--ea-streams', action='store_true', help="EA's two-section RefPack streams")
     ap.add_argument('--community-centres', action='store_true',
@@ -96,25 +106,30 @@ def main():
         return export(*a.export)
     if not a.tiles or not a.name:
         ap.error('tiles dir and display name required')
-    tpl_path = a.template or find_template()
-    if not tpl_path:
-        sys.exit('no template pack found; pass --template <pack.big>')
-    tpl = dlc.read_template(tpl_path)
     mj = json.load(open(os.path.join(a.tiles, 'map.json')))
     spots = [dlc.Spot(s['title'], tuple(s['pos']), s.get('yaw', 0.0),
-                      tuple(s['matrix']) if s.get('matrix') else None) for s in mj['spots']]
-    if len(spots) > len(tpl.keys):
-        sys.exit(f'{len(spots)} spots but the template has {len(tpl.keys)} locations')
+                      tuple(s['matrix']) if s.get('matrix') else None, s.get('key')) for s in mj['spots']]
+    if a.template is not None:
+        tpl_path = a.template or find_template()
+        if not tpl_path:
+            sys.exit('no template pack found; pass --template <pack.big>')
+        names = dlc.read_template(tpl_path)
+        if len(spots) > len(names.keys):
+            sys.exit(f'{len(spots)} spots but the template has {len(names.keys)} locations')
+        how = f'template {os.path.basename(tpl_path)}'
+    else:
+        names = dlc.names_for(a.name, spots, a.slug or mj.get('slug'), a.dist or mj.get('dist'))
+        how = 'template-free'
     tiles = load_tiles(a.tiles)
-    files = dlc.build_files(a.name, tiles, spots, tpl, cell=int(mj.get('cell', 100)),
+    files = dlc.build_files(a.name, tiles, spots, names, cell=int(mj.get('cell', 100)),
                             content={k: tuple(v) for k, v in mj.get('content', {}).items()},
                             center_rule='community' if a.community_centres else 'containing',
                             stream_form='xbox2' if a.ea_streams else 'raw',
                             dlc_tables=not a.no_dlc_tables)
-    path = dlc.write_pack(files, a.out, tpl.slug, a.name, a.content_id)
+    path = dlc.write_pack(files, a.out, names.slug, a.name, a.content_id)
     n = {k: len(v) for k, v in tiles.items()}
     print(f'{path}  {os.path.getsize(path) >> 20} MB  {len(files)} files  tiles {n}  '
-          f'template {os.path.basename(tpl_path)} ({tpl.slug}, {len(tpl.keys)} locations)')
+          f'{how}: slug {names.slug}, {names.dist}, {len(names.keys)} locations')
 
 
 if __name__ == '__main__':

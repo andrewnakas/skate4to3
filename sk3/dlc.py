@@ -21,10 +21,11 @@ A pack is `<PKG>/<slug>_00000000.big` (EB v3, flags 0x00500400, with a path dire
     stream/freeskate_dlc_S_L.xml                    per-location preload list (63 nearest tiles)
     unlocks/S.unlock, unlocks/S0000_product00000000.unlock
 
-Vault keys are 64-bit hashes of names whose function we have not identified (spec "Vaults"), so the
-generator keeps a template pack's internal names (slug, location keys, DIST name) and its vault keys,
-and generates everything that is ours: streams, manifests, tiles, boundaries, neighbour tables,
-locators (positions), location table, language strings (display texts), unlocks, header, archive.
+Every file is generated from the map's own inputs and names (slug, DIST name, location keys):
+streams, manifests, tiles, boundaries, neighbour tables, locators (ids = attrib_key of their names,
+arenas built from first principles), location table, language strings, unlocks, the AttribSys vaults
+(`vault.dlc_vaults`), header and archive. A working pack can still be given as a template
+(`read_template`), which then supplies its names, vault files and locator arenas verbatim.
 """
 from __future__ import annotations
 
@@ -34,7 +35,8 @@ import re
 import struct
 from dataclasses import dataclass, field
 
-from . import big, manifests as mf, rw4, rw4_write, sfil
+from . import big, manifests as mf, rw4, rw4_write, sfil, vault
+from .attrib_hash import attrib_key
 
 XML_HEAD = '<?xml version="1.0" encoding="us-ascii"?>'
 
@@ -346,6 +348,53 @@ def locator_arena(template: bytes, L: Locator) -> bytes:
     return rw4_write.build(spec)
 
 
+# eb0008 head object of every locator arena (190/190 in the packs)
+LOCATOR_HEAD = bytes.fromhex('000000190000000d0000000000000000')
+# the 25 type ids every eb000b import/export table lists (each with count 2 in locator arenas;
+# the same list as in every retail cSim arena, specs/sk3_collision.md)
+LOCATOR_TABLE_TYPES = (0xEB0066, 0xEB0005, 0xEB0067, 0xEB0006, 0xEB0001, 0xEB000A, 0xEB0065, 0xEB0007,
+                       0xEB0069, 0xEB000D, 0xEB006B, 0xEB0019, 0xEB0064, 0xEB0004, 0xEB0068, 0xEB0009,
+                       0xEB0016, 0xEB0013, 0xEB0014, 0xEB0018, 0xEB0017, 0xEB0020, 0xEB0024, 0xEB0026,
+                       0xEB0027)
+
+
+def locator_table(locator_id: int, export_id: int) -> bytes:
+    """eb000b of a locator arena: {2 records, records at 0x14, types at 0x44, 25, 0x44}; import
+    {0, 0xFEFFFFFF, locator id, 0xEB0068, 0x00800000 | 0}; export {0, 0xFEFFFFFF, export id,
+    0xEB0009, object 1}; then the 25 types with count 2. 190/190 pack locators equal this with their
+    own two ids."""
+    out = struct.pack('>5I', 2, 0x14, 0x44, len(LOCATOR_TABLE_TYPES), 0x44)
+    out += struct.pack('>IIQII', 0, 0xFEFFFFFF, locator_id, 0xEB0068, 0x00800000)
+    out += struct.pack('>IIQII', 0, 0xFEFFFFFF, export_id, 0xEB0009, 1)
+    out += b''.join(struct.pack('>II', t, 2) for t in LOCATOR_TABLE_TYPES)
+    return out
+
+
+def locator_own_ids(name: str) -> tuple:
+    """(arena id, export id) of a generated locator arena. Neither is referenced outside its own
+    arena (the pack bytes were searched for both), and neither is a hash of any name we tried in
+    the packs or in retail (retail global locators use unrelated ids too), so we derive our own:
+    attrib_key of the locator name with a suffix (low 32 bits for the arena id)."""
+    return attrib_key(name + '.arena') & 0xFFFFFFFF, attrib_key(name + '.export')
+
+
+def build_locator_arena(L: Locator, arena_id: int | None = None, export_id: int | None = None) -> bytes:
+    """A locator .rx2 from first principles: eb0008 head, eb0009 locator (`L`), eb000b table, one
+    subref (object 1, +0x20 = the root matrix); EA arena layout by rw4_write."""
+    a, x = locator_own_ids(L.name)
+    spec = rw4_write.Spec(arena_id if arena_id is not None else a, [
+        rw4_write.SpecObject(0xEB0008, 16, LOCATOR_HEAD),
+        rw4_write.SpecObject(0xEB0009, 16, write_locator_object(L)),
+        rw4_write.SpecObject(0xEB000B, 16, locator_table(L.locator_id, export_id if export_id is not None else x))],
+        subrefs=[(1, 0x20)])
+    return rw4_write.build(spec)
+
+
+def locator_file_stem(dist: str, name: str) -> str:
+    """`<DIST[:12]>_[0x<attrib_key(name)>]` (every pack locator file)."""
+    return f'{dist[:12]}_[0x{attrib_key(name):016x}]'
+
+
 # ---- the content header ------------------------------------------------------------------------
 HEADER_SIZE = 328
 TITLE_ID = 0x454108E6
@@ -408,19 +457,56 @@ def inventory(pack_big: str) -> dict:
     return out
 
 
-# ---- template + generator ----------------------------------------------------------------------
+# ---- names + generator -------------------------------------------------------------------------
 @dataclass
 class Spot:
     title: str
     pos: tuple                    # (x, y, z) metres, game space
     yaw: float = 0.0              # degrees about +Y
     matrix: tuple | None = None   # explicit 4x4 (row-major) instead of pos + yaw
+    key: str | None = None        # location key (default: slug for the first, spot<i> after)
+
+
+@dataclass
+class PackNames:
+    """A pack's internal names. Every key, id and file name of the pack derives from these."""
+    slug: str                     # e.g. summercamp: <slug>_00000000.big, unlocks, vaults, ...
+    dist: str                     # e.g. DIST_SummerCamp: world stream folder and manifests
+    keys: list                    # location keys, main first (summercamp, spot1, ...)
+
+
+def slug_for(display: str) -> str:
+    """Default slug: the display name's letters and digits, lower case (Summer Camp -> summercamp)."""
+    s = re.sub(r'[^a-z0-9]', '', display.lower())
+    if len(s) < 4:
+        s = (s + 'pack')[:max(4, len(s))]
+    return s
+
+
+def dist_for(display: str) -> str:
+    """Default DIST name: DIST_ + the display name's words capitalised (Summer Camp -> DIST_SummerCamp)."""
+    words = re.findall(r'[A-Za-z0-9]+', display)
+    return 'DIST_' + (''.join(w[:1].upper() + w[1:] for w in words) or 'Map')
+
+
+def default_keys(slug: str, n: int) -> list:
+    """The packs' location keys: the slug for the main location, then spot1..spot<n-1>."""
+    return [slug] + [f'spot{i}' for i in range(1, n)]
+
+
+def names_for(display: str, spots, slug: str | None = None, dist: str | None = None) -> PackNames:
+    slug = slug or slug_for(display)
+    keys = default_keys(slug, len(spots))
+    keys = [sp.key or k for sp, k in zip(spots, keys)]
+    if len(set(keys)) != len(keys):
+        raise ValueError(f'duplicate location keys {keys}')
+    return PackNames(slug, dist or dist_for(display), keys)
 
 
 @dataclass
 class Template:
-    """What a generated pack takes from a working pack: its internal names (slug, DIST name,
-    location keys) and the files keyed by them that we cannot re-key (vaults, locator ids)."""
+    """A working pack used as a template (optional): its internal names and the files we used to
+    copy from it (vault files verbatim, locator arenas' head/table objects and ids)."""
     path: str
     slug: str
     dist: str
@@ -464,16 +550,17 @@ def spot_center(pos, cell: int, rule: str = 'containing'):
     return (round(pos[0] / cell) * cell - cell // 2, round(pos[2] / cell) * cell - cell // 2)
 
 
-def build_files(display: str, tiles: dict, spots: list, tpl: Template, cell: int = 100,
+def build_files(display: str, tiles: dict, spots: list, names, cell: int = 100,
                 content: dict | None = None, center_rule: str = 'containing',
                 stream_form: str = 'raw', group: dict | None = None, tail: dict | None = None,
-                dlc_tables: bool = True) -> dict:
+                dlc_tables: bool = True, vault_version: int = vault.VERSION_PACK) -> dict:
     """Every file of a pack for a new map: {path: bytes}.
 
     tiles:   {'Pres'|'Sim'|'Tex': [(tile name, [(asset id, arena bytes)])]}; tile names
              c<Kind>_<x>_<z>_high (centres in metres) or c<Kind>_Global.
-    spots:   [Spot]; spots[0] is the main location, the rest fill the template's other location
-             keys in order; template locations left over reuse spots[0].
+    spots:   [Spot]; spots[0] is the main location.
+    names:   PackNames (template-free: everything generated) or a Template (its names, its
+             vault files and its locator arenas; its location keys beyond len(spots) reuse spots[0]).
     content: optional {tile name: (minx, miny, minz, maxx, maxy, maxz)} content boxes for CSPA
              (default: the cell, y -100..300).
     group:   optional {kind: group hash} (default: derived from the DIST name).
@@ -481,7 +568,10 @@ def build_files(display: str, tiles: dict, spots: list, tpl: Template, cell: int
              is unused stack garbage in EA's own streams).
     dlc_tables: also write stream/dist_<slug>_<key>dlc_{Pres,Sim}.xml, the tables the game reads
              for a DLC location (community packs other than Skate 2 lack them)."""
-    S, D, keys = tpl.slug, tpl.dist, tpl.keys
+    tpl = names if isinstance(names, Template) else None
+    S, D, keys = names.slug, names.dist, list(names.keys)
+    if tpl is None and len(keys) != len(spots):
+        raise ValueError(f'{len(spots)} spots for {len(keys)} location keys')
     root = f'data/content/world/stream/{D}'
     out = {}
     content = content or {}
@@ -516,12 +606,15 @@ def build_files(display: str, tiles: dict, spots: list, tpl: Template, cell: int
         m = sp.matrix or mf.spawn_transform(*sp.pos, yaw_deg=sp.yaw)
         base = f'freeskate_{S}_{key}'
         for nm, ring in ((f'{base}_locator', True), (f'Z_{S}_{key}_Start', False)):
-            stem, arena = tpl.locators[nm]
-            lid = int(re.search(r'\[0x([0-9a-f]+)\]', stem).group(1), 16)
-            L = Locator(nm, m, lid, spawn_ring(nm, base, m) if ring else [])
+            L = Locator(nm, m, attrib_key(nm), spawn_ring(nm, base, m) if ring else [])
+            if tpl is not None:
+                stem, arena = tpl.locators[nm]
+                rx2 = locator_arena(arena, L)
+            else:
+                stem, rx2 = locator_file_stem(D, nm), build_locator_arena(L)
             gl = f'data/content/global_locators/DLC_BAM/{D}/{stem}'
             out[gl + '.loc'] = mf.write_loc([mf.Location(nm, m)])
-            out[gl + '.rx2'] = locator_arena(arena, L)
+            out[gl + '.rx2'] = rx2
             table.append(mf.Location(nm, m))
         loc_name = f'freeskate_dlc_{S}_{key}'
         out[f'data/boundary/{loc_name}.xml'] = write_boundary(boundary_rect(centers, cell))
@@ -545,17 +638,28 @@ def build_files(display: str, tiles: dict, spots: list, tpl: Template, cell: int
     out[f'data/fe/languages/english/LANGUAGE_English_HISTOGRAM_skate3ng-dlc_{S}_minimal.BIN'] = write_histogram()
     out[f'data/unlocks/{S}.unlock'] = b''
     out[f'data/unlocks/{S}0000_product00000000.unlock'] = product_unlock(S)
-    out.update(tpl.vaults)
+    if tpl is not None:
+        out.update(tpl.vaults)
+    else:
+        for p, b in vault.dlc_vaults(S, keys, D, version=vault_version).items():
+            out['data/db/' + p] = b
     return out
 
 
-def inputs_of_pack(pack_big: str, tpl: Template | None = None):
+def names_of_pack(pack_big: str) -> PackNames:
+    """The internal names of a working single-world pack (slug from its unlock file, DIST from its
+    stream folder, location keys from its Sim location table)."""
+    t = read_template(pack_big)
+    return PackNames(t.slug, t.dist, t.keys)
+
+
+def inputs_of_pack(pack_big: str, names: PackNames | None = None):
     """The generator inputs a working pack implies: (display name, tiles, spots, cell, group
-    hashes). Used to rebuild a pack's metadata and compare it with the original."""
-    tpl = tpl or read_template(pack_big)
+    hashes, tail words, content boxes). Used to rebuild a pack and compare it with the original."""
+    names = names or names_of_pack(pack_big)
     a = big.read(pack_big)
     files = {e.path: e for e in a.entries}
-    S, D = tpl.slug, tpl.dist
+    S, D = names.slug, names.dist
     root = f'data/content/world/stream/{D}'
     lang = read_language(a.read(files[f'data/fe/languages/english/LANGUAGE_English_{S}_skate3ng-dlc_{S}_minimal.BIN']))
     hs = lang.by_hash()
@@ -564,22 +668,26 @@ def inputs_of_pack(pack_big: str, tpl: Template | None = None):
     for kind, _p in mf.KINDS:
         cm = mf.read_cmap(a.read(files[f'{root}/{D}_{kind}.xsm']))
         cs = mf.read_cspa(a.read(files[f'{root}/{D}_{kind}.xss']))
-        names = [e.name for e in cm.entries if not e.name.endswith('_Global')]
-        for n, c in zip(names, cs.cells):
+        names_ = [e.name for e in cm.entries if not e.name.endswith('_Global')]
+        for n, c in zip(names_, cs.cells):
             content[n] = c.content
         group[kind] = cm.group
         if cm.entries:
             tail[kind] = sfil.read(a.read(files[f'{root}/{cm.entries[0].name}.xsf']))[0]['tail']
         tiles[kind] = [(e.name, [(s.id, s.arena) for s in sfil.read(a.read(files[f'{root}/{e.name}.xsf']))[1]])
                        for e in cm.entries]
+    locs = {}
+    for p, e in files.items():
+        if p.startswith('data/content/global_locators/') and p.endswith('.rx2'):
+            L = parse_locator_object(rw4.parse(a.read(e)).objects[1].data)
+            locs[L.name] = L
     spots = []
-    for k in tpl.keys:
-        nm = f'freeskate_{S}_{k}_locator'
-        m = parse_locator_object(rw4.parse(tpl.locators[nm][1]).objects[1].data).matrix
+    for k in names.keys:
+        m = locs[f'freeskate_{S}_{k}_locator'].matrix
         t = hs[string_id(f'ID_LOCATION_{S.upper()}_{k.upper()}')]
         yaw = math.degrees(math.atan2(-m[2], m[0]))
         spots.append(Spot(t[len(display) + 3:] if t.startswith(display + ' - ') else t,
-                          tuple(m[12:15]), yaw, tuple(m)))
+                          tuple(m[12:15]), yaw, tuple(m), k))
     xs = sorted({mf.tile_center(n)[0] for n, _ in tiles['Sim'] if mf.tile_center(n)})
     cell = min((b - a2 for a2, b in zip(xs, xs[1:])), default=100)
     return display, tiles, spots, cell, group, tail, content
