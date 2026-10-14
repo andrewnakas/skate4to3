@@ -6,6 +6,13 @@ original file by file (except where the spec documents a deliberate difference).
 """
 import collections, os, re, sys
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _legacy_global_group(monkeypatch):
+    """These tests regenerate community packs byte for byte, bug included."""
+    import sk3.manifests as _mf
+    monkeypatch.setattr(_mf, 'LEGACY_MISSING_GLOBAL_GROUP', True)
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))

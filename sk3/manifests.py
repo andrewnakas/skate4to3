@@ -27,6 +27,9 @@ from dataclasses import dataclass, field
 
 VERSION = 3
 ROOT_GROUP = 0xE171E1ABFEDB69ED      # group id of every *_Global entry
+# True reproduces the community packs' bug (tiles of a group with no *_Global point at a missing
+# Global id) so tests can regenerate those packs byte for byte. Never set it for real builds.
+LEGACY_MISSING_GLOBAL_GROUP = False
 ATOC_TAG = 0xAB329A6A
 SENTINEL = 0xDEADC0DE
 
@@ -286,12 +289,18 @@ def generate(dist: str, kind: str, tiles: list, cell: float = 100.0, platform: i
     at = Atoc(g)
     seen = set()
     half = cell / 2
+    # Tiles hang off the group's *_Global entry when there is one; with none (retail
+    # BlackBoxPark's Sim group) every tile is in ROOT_GROUP. A tile group naming a Global the
+    # list does not contain makes the game's stream tile-list loader (sub_82C98B08) write N+1 ids
+    # into an N-id vector - the heap overrun that crashed Isle of Grom / DM Jumpline.
+    tile_group = (glob_id if LEGACY_MISSING_GLOBAL_GROUP or any(t.name.endswith('_Global') for t in order)
+                  else ROOT_GROUP)
     for t in order:
         is_global = t.name.endswith('_Global')
         aid = glob_id if is_global else (fnv1_64(f'{t.name}_{dist}') if os.environ.get('SK3_UNIQUE_TILE_IDS')
                                           else fnv1_64(t.name))
         size = t.stream_size if size_includes_header else t.stream_size - alignment
-        cm.entries.append(CmapEntry(aid, ROOT_GROUP if is_global else glob_id, alignment, size,
+        cm.entries.append(CmapEntry(aid, ROOT_GROUP if is_global else tile_group, alignment, size,
                                     len(t.arenas), t.name))
         for a_id, arena in t.arenas:
             if a_id not in seen:

@@ -9,7 +9,7 @@ FILTER=${1:-.}
 mkdir -p work/batch
 targets=()
 # stock skate. levels: id|level|display|mod root
-for l in "ftue|dingolevel_ftue_island|FTUE Island|" "splash|dingolevel_splash|Splash|" \
+for l in "ftue|dingolevel_ftue_island|FTUE Island|" \
          "sdm1|dingolevel_sdm/dingolevel_sdm_int_001|SDM Interior 1|" "sdm2|dingolevel_sdm/dingolevel_sdm_int_002|SDM Interior 2|"; do
   targets+=("$l"); done
 for m in "$MODS"/*; do
