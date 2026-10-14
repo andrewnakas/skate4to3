@@ -3,7 +3,8 @@
     0x00 'SFIL'  0x04 version 3  0x08 0  0x0C group hash  0x10 align  0x14 group count (1)
     0x18 platform (2 = EA Xbox form, 0 = raw form)  0x1C tail word; zero padding to `align`
     chunk: u64 asset id, u32 payload size, u32 payload offset (= align), u32 chunk size
-           (= payload offset + size rounded up to align); zeros to the payload; zeros after it
+           (EA: payload offset + size rounded up to align; community raw packs: one more align
+           block when size is already a multiple); zeros to the payload; zeros after it
     payload: a raw RW4 arena ('\\x89RW4'; platform 0, align 0x100 in every community pack), or EA's
     Xbox two-section form (platform 2, align 0x80): a 0x50-byte descriptor, main section
     {u32 raw size = arena h44, u32 stored size, u32 RefPack flag} at 0x00, graphics section
@@ -47,10 +48,12 @@ class Header:
     tail: int = 0
     version: int = 3
     groups: int = 1
+    pad_over: bool = False   # chunk size = offset + (size // align + 1) * align (community raw packs)
 
     @classmethod
     def from_dict(cls, h: dict) -> 'Header':
-        return cls(h['group'], h['align'], h['platform'], h['tail'], h['version'], h['groups'])
+        return cls(h['group'], h['align'], h['platform'], h['tail'], h['version'], h['groups'],
+                   h.get('pad_over', False))
 
 
 def payload_to_arena(p: bytes):
@@ -76,7 +79,7 @@ def read(data: bytes):
         raise ValueError('not an SFIL stream')
     version, _z, group, align, groups, platform, tail = struct.unpack_from('>IIIIIII', data, 4)
     hdr = {'version': version, 'group': group, 'align': align, 'groups': groups,
-           'platform': platform, 'tail': tail}
+           'platform': platform, 'tail': tail, 'pad_over': False}
     out, off = [], align
     while off + 0x20 <= len(data):
         aid = struct.unpack_from('>Q', data, off)[0]
@@ -90,6 +93,8 @@ def read(data: bytes):
             a = payload_split(p)
             a.id = aid
             out.append(a)
+        if size % align == 0 and csize == doff + size + align:
+            hdr['pad_over'] = True
         off += csize or ((doff + size + align - 1) // align * align)
     return hdr, out
 
@@ -130,7 +135,7 @@ def write(hdr, assets, form: str | None = None, compress: bool = True, depth: in
     for a in assets:
         f = form or a.form
         p = a.arena if f == 'raw' else xbox_payload(a, compress, depth)
-        csize = (al + len(p) + al - 1) // al * al
+        csize = (al + len(p) + (al if h.pad_over else al - 1)) // al * al
         chunk = bytearray(al)
         struct.pack_into('>QIII', chunk, 0, a.id, len(p), al, csize)
         out += chunk
@@ -141,7 +146,7 @@ def write(hdr, assets, form: str | None = None, compress: bool = True, depth: in
 
 def raw_stream(group: int, assets, tail: int = 0) -> bytes:
     """The raw container form: align 0x100, platform 0, arenas stored as-is."""
-    return write(Header(group, RAW_ALIGN, PLATFORM_RAW, tail), assets, form='raw')
+    return write(Header(group, RAW_ALIGN, PLATFORM_RAW, tail, pad_over=True), assets, form='raw')
 
 
 def ea_stream(group: int, assets, tail: int = 0, compress: bool = True, depth: int = 0) -> bytes:
