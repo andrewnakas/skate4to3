@@ -74,12 +74,25 @@ class SuperBundle:
         assert self.bundle_data >= self.bundle_hashmap + self.bundles_count * 4
         assert self.chunk_hashmap == self.bundle_data + self.bundles_count * 16
         assert self.chunk_guids == self.chunk_hashmap + self.chunks_count * 4
-        idx = self.chunk_guids + self.chunks_count * 16
-        assert self.chunk_records == idx + self.chunks_count * 4, (self.chunk_records, idx)
+        # chunk table: 20 B per chunk (16 B guid + u32 index)
+        assert self.chunk_records == self.chunk_guids + self.chunks_count * 20, self.chunk_records
 
     def chunk(self, i: int) -> ChunkRef | None:
-        """Chunk-table entry i. Layout pending re-measurement (specs/SKATE_FORMATS.md, P1)."""
-        raise NotImplementedError('chunk table layout: re-measure in P1')
+        """Chunk-table entry i (layout measured in specs/SKATE_FORMATS.md, "TOC chunk table").
+
+        20 B per entry: 16 B guid stored byte-reversed, then u32 BE idx. idx 0xFFFFFFFF = no
+        record; otherwise the high bit is set and the low bits are a byte offset into a table of
+        4-byte words, so the 16-byte location record is number (idx & 0x7FFFFFFF) >> 2.
+        Returned guid is in descriptor order (as DxTexture / MeshSet reference it).
+        """
+        g = BASE + self.chunk_guids + i * 20
+        guid = self.d[g:g + 16][::-1].hex()
+        idx = struct.unpack_from('>I', self.d, g + 16)[0]
+        if idx == 0xFFFFFFFF:
+            return None
+        o = BASE + self.chunk_records + ((idx & 0x7FFFFFFF) >> 2) * 16
+        a, b, off, size = struct.unpack_from('>IIII', self.d, o)
+        return ChunkRef(guid, package_name(a, b >> 16), b & 0xFFFF, off, size)
 
     def chunks(self):
         return (c for c in (self.chunk(i) for i in range(self.chunks_count)) if c is not None)

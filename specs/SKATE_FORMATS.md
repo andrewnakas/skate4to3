@@ -46,7 +46,7 @@ Root size lands exactly on EOF — used to locate it without hard-coding 0x22C.
 [ 3] chunkHashMapOffset    5080      = 1064 + bundlesCount*16
 [ 4] chunkGuidOffset       91444     = 5080 + chunksCount*4
 [ 5] chunksCount           21591
-[ 6] 523264   = 91444 + chunksCount*16 + chunksCount*4
+[ 6] 523264   = 91444 + chunksCount*20 (chunk records)
 [ 7] 523264
 [ 8] 868720
 [ 9] 523264
@@ -60,7 +60,20 @@ All arithmetic relations above were verified against `dingolevel_isle_of_grom.to
 (1,998,268 bytes). Hash-map slots are int32; negative = empty.
 
 Bundle record (16 B): `[u32 a, u32 b|0x40000000, u32 0, u32 c]`.
-Chunk GUIDs: 16 B each at `chunkGuidOffset`.
+### TOC chunk table (measured 2026-10-14, `tools/measure/toc_chunk_table.py`)
+
+`chunkGuidOffset` holds `chunksCount` x **20 B** entries (the section is exactly 20 B/chunk in
+every TOC, e.g. items.toc 311,620 B / 15,581): 16 B guid then u32 BE `idx`.
+- The guid is stored **byte-reversed** relative to the order DxTexture/MeshSet descriptors use.
+  Measured: descriptor guid `2819ead3...f63f` (texture `metal_steel_02_2x2m_c`) is absent in
+  descriptor order and present reversed at +172,220 = 8,611 x 20 (an entry boundary).
+- `idx` always has the high bit set (0 exceptions over 24 TOCs); `idx & 0x7FFFFFFF` is a byte
+  offset into 4-byte words (low 2 bits always 0), so the location record is
+  `(idx & 0x7FFFFFFF) >> 2`. Oracle: that record's size = 388,756 = ReSkate Studio's `encoded`
+  size for the same chunk; the other candidate mappings land on unrelated records.
+- Over all 24 TOCs: no record index out of range, no record shared by two entries.
+- Studio prints guids in Microsoft text form = `uuid.UUID(bytes_le=<descriptor-order bytes>)`.
+- Localisation TOCs reference extra package ids (e.g. 0xEAF2/0x7217) with no package on disk.
 
 ### Chunk CAS records — CONFIRMED
 
@@ -182,3 +195,8 @@ Validated on 40 random meshes: every index in range, positions inside section AA
   translation), `2fc5fe8d…` EcsMeshComponentAsset, `b6cd360d…` spline control point,
   `2e6a66cc…` spline (Tension/IsClosed).
 - Grindability is in material names: `…_Grindable` / `…_NoneGrindable`.
+
+### MeshSet section +0x138 = ShaderBlockDepot key (re-measured 2026-10-14)
+`tests/test_oracle_meshes.py`: for 400 MeshSets dumped by `reskate_cli dump-res` (filter `_mesh`), the
+u64 at section +0x138 equals the `key=` Studio's `mesh-sections` prints for every section of every LOD,
+in order (with material names).
