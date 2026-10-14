@@ -50,7 +50,7 @@ Corpus (bytes only, read with our own readers):
   manifest rebuild).
 - Rewrite: `read` keeps each RefPack section's stored bytes; `write` reuses them while the arena is
   unchanged. Result: every stream of the 7 small worlds and of 4 DLC packs re-writes byte for byte
-  (pytest); `python tests/test_sfil_roundtrip.py` covers the 3 large worlds too.
+  (pytest), and DownTown 637/637, Industrial 1552/1552, University 635/635 (SK3_SFIL_ALL run).
 
 ## Manifests (`sk3/manifests.py`, `tests/test_manifests.py`)
 Byte-exact read/write over every manifest in all 10 worlds and 6 DLC packs: 60 MMAP, 60 CMAP,

@@ -4,6 +4,7 @@ Retail data: the recomp's `game/data` (C:\dev\skate3recomp\out\build\windows-rel
 World maps ship as `content/worldDIST_<Map>.big` with root `data/content/world/stream/DIST_<Map>`.
 
 ## BIG archive ("EB\0\3", big-endian) - `sk3/big.py`
+(Writer, record shift / stored-size word, name-table and path-directory rules: specs/sk3_packaging.md.)
 Header: +0x04 entry count, +0x08 flags (0x00100400 world archives, 0x00100600 multi-root content,
 0x00500400 DLC per our earlier work), +0x0C name table offset, +0x10 name table length,
 +0x14 name layout = slotStride<<24 | rootStride<<16 | rootCount, +0x1C total size,
