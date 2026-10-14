@@ -35,7 +35,9 @@ from . import texture_write as tw
 COMPONENTS = {'SCALAR': 1, 'VEC2': 2, 'VEC3': 3, 'VEC4': 4}
 DTYPES = {5126: np.float32, 5125: np.uint32, 5123: np.uint16, 5121: np.uint8}
 DEFAULT_SURFACE = 0xB700          # most common retail surface id (meaning not yet measured)
-MAX_PART_VERTS = 0xFFFF
+MAX_PART_VERTS = 8000            # retail: largest vertex block 349 KB (~12k verts at 28 B)
+ARENA_MAX_MESHES = 48            # retail cPres arenas: <= 60 meshes (p99 57)
+ARENA_MAX_BYTES = 750_000        # retail cPres arenas: <= 921 KB (p99 706 KB); one arena hung the loader at 7 MB
 
 
 def h64(*parts) -> int:
@@ -215,8 +217,14 @@ def assemble(glb_dir, out_dir, size=100.0):
                 if not pres:
                     continue
                 tile_tex[key].update(texids.values())
-                for s in range(0, len(T), 20000):            # keep each part under 65,535 vertices
-                    P2, T2, N2, U0, U1 = compact(P, T[s:s + 20000], N, UV0, UV1)
+                step = max(1, int(len(T) * MAX_PART_VERTS / max(len(P), 1)))
+                s = 0
+                while s < len(T):                            # parts under MAX_PART_VERTS vertices
+                    P2, T2, N2, U0, U1 = compact(P, T[s:s + step], N, UV0, UV1)
+                    if len(P2) > MAX_PART_VERTS and step > 1:
+                        step //= 2
+                        continue
+                    s += step
                     render[key].append({
                         'positions': P2, 'indices': T2,
                         'normals': N2 if N2 is not None else np.tile([0.0, 1.0, 0.0], (len(P2), 1)),
@@ -239,9 +247,20 @@ def assemble(glb_dir, out_dir, size=100.0):
         name = f'{key[0]}_{key[1]}'
         rec = {'tile': list(key), 'textures': sorted(f'{t:016x}' for t in tile_tex[key])}
         if render[key]:
-            data = rwr.build_render_arena(render[key], h32('cPres', name), name=f'cPres_{name}')
-            open(os.path.join(out_dir, f'cPres_{name}.arena'), 'wb').write(data)
-            rec['pres_bytes'] = len(data)
+            groups, cur, est = [], [], 0
+            for p in render[key]:
+                b = len(p['positions']) * 28 + len(p['indices']) * 6 + 600
+                if cur and (len(cur) >= ARENA_MAX_MESHES or est + b > ARENA_MAX_BYTES):
+                    groups.append(cur); cur, est = [], 0
+                cur.append(p); est += b
+            groups.append(cur)
+            rec['pres_arenas'], rec['pres_bytes'] = [], 0
+            for gi, g in enumerate(groups):
+                data = rwr.build_render_arena(g, h32('cPres', name, gi), name=f'cPres_{name}_{gi}')
+                fn = f'cPres_{name}_{gi:02d}.arena'
+                open(os.path.join(out_dir, fn), 'wb').write(data)
+                rec['pres_arenas'].append(fn)
+                rec['pres_bytes'] += len(data)
             rec['pres_tris'] = int(sum(len(p['indices']) for p in render[key]))
         if coll[key]:
             Vs, Ts, Ss, base = [], [], [], 0

@@ -57,8 +57,10 @@ def main():
         x, z = rec['tile']
         texs = [t for t in rec['textures'] if not meta[t].get('default')]
         if 'pres_bytes' in rec:
-            k = 0
-            put(f'cPres_{x}_{z}_high', k, open(os.path.join(a.arenas, f'cPres_{name}.arena'), 'rb').read())
+            k = -1
+            for fn in rec['pres_arenas']:
+                k += 1
+                put(f'cPres_{x}_{z}_high', k, open(os.path.join(a.arenas, fn), 'rb').read())
             for t in texs:
                 k += 1
                 put(f'cPres_{x}_{z}_high', k, tex_arena(os.path.join(a.arenas, 'tex', f'{t}.png'), int(t, 16), lowres=True))

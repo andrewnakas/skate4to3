@@ -38,10 +38,24 @@ history bundle D:\n64work\archive\skate4mapsconversionpipeline.bundle (+ .uncomm
 - P2 started: sk3/big.py (all 28 named retail archives), sk3/sfil.py, sk3/refpack.py, sk3/rw4.py,
   tools/measure/sk3_census.py. A background agent is writing sk3/rw4_write.py (byte-exact round trip).
 
-## Next
-- finish the Summer Camp front-end run (extract with the wider level filter), then export GLBs
-  (sk4/export_glb.py) and compare verify/audit numbers with the old v6b build logs.
-- P2/P3: arena writer (agent), then mesh/material/texture/collision/spline object specs + builders.
+- P3 done by agents, all byte-exact on retail: RW4 arena writer (56,215 arenas), render meshes/materials
+  (29,578 cPres arenas) + builder, textures (51,316) + BC1/BC3 encoder, collision mesh/KD/splines (all
+  10 worlds) + builder, packaging (SFIL 7,089 streams, manifests, BIG incl. 3.9 GB pack, DLC metadata).
+- Vault/locator name hash found in the retail code (lookup8, a=b=0xABCDEF0011223344, c=golden ratio).
+- Template-free DLC generator (sk3/vault.py, dlc.py): no community pack needed.
+- P4: sk3/assemble.py (GLB blocks -> 100 m tile arenas), tools/build_pack.py, tools/pack.py.
+- IN GAME (2026-10-14 ~06:30): Summer Camp built 100% by skate4to3 loads and plays on the owner's test
+  rig (tools/boot_test.sh: rig at D:/n64work/sanvan/colldiag/run, travel via injected pause-menu inputs).
+  Root cause of the first hang: one 7 MB render arena per tile; retail arenas are <= 921 KB / 60 meshes,
+  so assemble now splits (<= 48 meshes, ~750 KB, <= 8,000-vertex parts).
+  Bisection packs (work/hyb): C0 (old tiles + our packager) OK, A (our collision) OK, B2 (our textures) OK.
+
+## Next (P5 quality)
+- colours: black/dark props and the orange paint ramps come out white/washed (tint path or layer pick) -
+  compare spots old vs new; check sk3 render material params (specular/lightmap defaults).
+- skater looked sunk in the old render with our collision (hybrid A) - recheck with our own render.
+- one cPres stream still ~8 MB (150_-50); decide the real stream limit from retail.
+- Isle of Grom end to end; then owner playtest; then P6 publish.
 
 ## Owner decisions pending
 - none
