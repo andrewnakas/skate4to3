@@ -150,6 +150,10 @@ def main():
         if len(cols) == 1:
             only_colour[cols[0]] += 1
 
+    # Per-shader layer/tint rules fitted against skate.'s baked proxy colours
+    # (tools/calibrate_layers.py + tools/fit_layer_rules.py); absent = defaults below.
+    cp = os.path.join(WORK, 'layer_choice.json')
+    choice = json.load(open(cp)) if os.path.exists(cp) else {}
     shaders = {}
     out, stats = {}, collections.Counter()
     for key, P in mats.items():
@@ -169,9 +173,23 @@ def main():
                 fam['_hash'] = p.hash
         colour = [f for f in layers.values() if 'c' in f]
         rec = {'shader': sig}
+        rule = choice.get(sig)
         if colour:
             colour.sort(key=lambda f: -only_colour.get(f['_hash'], 0))
+            if rule and rule.get('layer'):
+                pick = [f for f in colour if f['_hash'] == int(rule['layer'], 16)]
+                if pick:
+                    colour.remove(pick[0])
+                    colour.insert(0, pick[0])
+                    stats['layer from rule'] += 1
             best = colour[0]
+            if rule and rule.get('tint') and rule['tint'][1] in ('mul', 'mul2'):
+                th = int(rule['tint'][0], 16)
+                v = next((p.floats[:3] for p in P if p.hash == th and p.type == depot.VEC3), None)
+                if v is not None:
+                    k = 2.0 if rule['tint'][1] == 'mul2' else 1.0
+                    rec['tint'] = [round(k * x, 4) for x in v]
+                    stats['tint from rule'] += 1
             rec.update({k: best[k] for k in ('c', 'ny', 'msk') if k in best})
             rec['layers'] = [{k: f[k] for k in ('c', 'ny', 'msk') if k in f} for f in colour]
             stats['bound'] += 1
