@@ -14,7 +14,7 @@ from PIL import Image
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 from sk3 import texture_write as tw
-from sk3.assemble import h64, h32
+from sk3.assemble import h64, h32, tile_texture_id
 
 STANDIN_PX = 16          # retail-style cPres stand-in; every level pads to 4 KB, so keep it tiny
 
@@ -64,7 +64,8 @@ def main():
                 put(f'cPres_{x}_{z}_high', k, open(os.path.join(a.arenas, fn), 'rb').read())
             for t in texs:
                 k += 1
-                put(f'cPres_{x}_{z}_high', k, tex_arena(os.path.join(a.arenas, 'tex', f'{t}.png'), int(t, 16), lowres=True))
+                put(f'cPres_{x}_{z}_high', k, tex_arena(os.path.join(a.arenas, 'tex', f'{t}.png'),
+                                                         tile_texture_id(int(t, 16), x, z), lowres=True))
         if 'sim_bytes' in rec:
             put(f'cSim_{x}_{z}_high', 0, open(os.path.join(a.arenas, f'cSim_{name}.arena'), 'rb').read())
         if texs:
@@ -77,9 +78,8 @@ def main():
                 cap[t] //= 2
                 size[t] = int(size[t] / 4)
             for k, t in enumerate(texs):
-                full = cap[t] >= max(meta[t]['w'], meta[t]['h'])
-                data = (open(os.path.join(a.arenas, 'tex', f'{t}.arena'), 'rb').read() if full else
-                        tex_arena(os.path.join(a.arenas, 'tex', f'{t}.png'), int(t, 16), size_cap=cap[t]))
+                data = tex_arena(os.path.join(a.arenas, 'tex', f'{t}.png'), tile_texture_id(int(t, 16), x, z),
+                                 size_cap=cap[t])
                 put(f'cTex_{x}_{z}_high', k, data)
             report.append(sum(size.values()))
     spawns = json.load(open(os.path.join(a.glb, 'd2s3_spawns.json')))

@@ -46,6 +46,13 @@ def h64(*parts) -> int:
     return int.from_bytes(d, 'big') & 0x3FFFFFFFFFFFFFFF
 
 
+def tile_texture_id(base: int, x: int, z: int) -> int:
+    """The id a tile's own copy of a texture carries. Each tile streams its own copy; with one id
+    shared by every tile, a neighbour streaming out took the texture with it and meshes turned
+    white while skating (Summer Camp, 2026-10-14). Retail never shares a texture id across tiles."""
+    return h64('tile-tex', f'{base:016x}', x, z)
+
+
 def h32(*parts) -> int:
     d = hashlib.blake2b('|'.join(map(str, parts)).encode(), digest_size=4).digest()
     return int.from_bytes(d, 'big') or 1
@@ -234,6 +241,8 @@ def assemble(glb_dir, out_dir, size=100.0, shift=None):
                 if not pres:
                     continue
                 tile_tex[key].update(texids.values())
+                tex_here = {sl: (t if tex.meta[t].get('default') else tile_texture_id(t, *key))
+                            for sl, t in texids.items()}
                 step = max(1, int(len(T) * MAX_PART_VERTS / max(len(P), 1)))
                 s = 0
                 while s < len(T):                            # parts under MAX_PART_VERTS vertices
@@ -249,7 +258,7 @@ def assemble(glb_dir, out_dir, size=100.0, shift=None):
                         'uv1': U1 if U1 is not None else np.full((len(P2), 2), 0.5),
                         'material': {'name': pr['material'][:60],
                                      'shader': 'environmentsimple.default',
-                                     'textures': texids}})
+                                     'textures': tex_here}})
         print(f'  {bf}: tiles so far {len(set(render) | set(coll))}, textures {len(tex.ids)}', flush=True)
 
     spl = collections.defaultdict(list)
