@@ -24,13 +24,24 @@ history bundle D:\n64work\archive\skate4mapsconversionpipeline.bundle (+ .uncomm
   Param names (Param_Base_C ...) exist in shader EBX but the 64-bit hash function is unknown
   (FNV/djb2/sdbm/crc/md5 all miss) - not needed.
 
+- P1.3c layer/tint rules: tools/calibrate_layers.py samples skate.'s baked proxy atlases (4,000 meshes),
+  tools/fit_layer_rules.py keeps per-shader rules only where 2-fold held-out error beats the default by
+  >=10% (18 shaders, 4,222 sections: 0.925 -> 0.549). bind_keys applies them (30k tints, 5k layer picks).
+  CAUTION: tint hash 0x67978f09c3b45f30 x2 is tiny in some shaders - check renders in P5.
+- P1.4 terrain presets: surface name -> world/materials/terrain family by token overlap (9 surfaces);
+  bake_materials (ours) re-bakes to the preset colour. Level filter now includes road-generator meshes.
+- P1.5 decals: collect.extract_decals rewritten (658/658 volumes match the old extraction by position,
+  row/col, template; keys changed with the 10-13 game update); sk4/decal_sheets.py bakes 61/64 templates
+  (opacity = osk/osm RED, grid cols tag 0x406E / rows 0xF7A1, colour tag 0x8C54 x2).
+- tools/front_end.sh <level> <dir>: index -> partitions -> guid index -> bind_keys -> collect -> level_keys ->
+  extract -> inherit -> bind_by_name -> build_key_textures -> decal_sheets -> bake_materials.
+- P2 started: sk3/big.py (all 28 named retail archives), sk3/sfil.py, sk3/refpack.py, sk3/rw4.py,
+  tools/measure/sk3_census.py. A background agent is writing sk3/rw4_write.py (byte-exact round trip).
+
 ## Next
-P1.3c calibrate layer choice + tints against skate.'s baked far-LOD proxy atlases
-  (`*_proxy_c` / M_Proxy_Atlas sections = the game's own baked look of the mesh): for meshes with a
-  proxy, fit which layer/vec3 reproduces the proxy colour; learn per-hash tint roles from that.
-  Known wrong today: bench QD_BenchPark_01_Wood_M picks paint over lumber; no tints at all.
-P1.4 terrain presets + terrain quads; P1.5 decal volumes + bake. Then P1 gate (full Summer Camp
-  front-end run vs old pipeline numbers), then P2.
+- finish the Summer Camp front-end run (extract with the wider level filter), then export GLBs
+  (sk4/export_glb.py) and compare verify/audit numbers with the old v6b build logs.
+- P2/P3: arena writer (agent), then mesh/material/texture/collision/spline object specs + builders.
 
 ## Owner decisions pending
 - none

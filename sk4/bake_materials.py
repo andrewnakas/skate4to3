@@ -130,7 +130,7 @@ def main():
     g2t = {bytes.fromhex(k): v for k, v in
            json.load(open(os.path.join(WORK, 'guid_to_texture.json'))).items()}
     del RES
-    mats, _ = load_depots()
+    depots, _ = load_depots()
     dt = json.load(open(os.path.join(WORK, 'depot_textures.json')))
     kt_path = os.path.join(WORK, 'depot_key_textures.json')
     kt = json.load(open(kt_path))
@@ -149,7 +149,7 @@ def main():
     for k, rec in dt.items():
         if not k.isdigit():
             continue
-        params = mats.get(int(k))
+        params = depots.get(int(k))
         if params is None:
             continue
         P = {p.tag: ((p.type, 1, b'' + p.raw[:32]) if p.type == depot.TEXTURE else (p.type, p.count, p.raw))

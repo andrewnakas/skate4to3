@@ -24,7 +24,12 @@ WORK = os.environ.get('SKATE_WORK', os.path.join(os.path.dirname(HERE), 'work'))
 def main():
     allb = json.load(open(os.path.join(WORK, 'depot_textures_all.json')))
     res = json.load(open(os.path.join(WORK, 'global_assets.json')))['res']
-    meshes = sorted({m for m, _T, _src in json.load(open(os.path.join(WORK, 'instances.json'))) if m in res})
+    meshes = {m for m, _T, _src in json.load(open(os.path.join(WORK, 'instances.json')))}
+    mp = os.path.join(WORK, 'material_meshes.json')          # also road-generator / blueprint meshes
+    if os.path.exists(mp):
+        for v in json.load(open(mp)).values():
+            meshes.update(v)
+    meshes = sorted(m for m in meshes if m in res)
     keys, handles = set(), {}
     for s in range(0, len(meshes), 400):
         raw = []
