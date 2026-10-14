@@ -199,15 +199,9 @@ def packed_tile_offset(t, w, h, bw):
     x and y swapped."""
     wide = w > h
     major = w if wide else h
-    if t < 3:
-        a, b = 0, 16 >> t
-    else:
-        a, b = 4 * max(1, major >> t), 0
-    x, y = (b, a) if not wide else (a, b)
-    if not wide:
-        x, y = b, a
-    else:
-        x, y = a, b
+    along_minor, along_major = (16 >> t, 0) if t < 3 else (0, 4 * max(1, major >> t))
+    # t < 3: step across the short axis (y for wide, x for square/tall); later: along the long axis
+    x, y = (along_major, along_minor) if wide else (along_minor, along_major)
     return x // bw, y // bw
 
 
@@ -271,25 +265,22 @@ def decode_bc1(blocks: bytes, force4=False):
 
 
 def decode_bc3_alpha(a8):
+    """[n,8] BC3 alpha blocks -> [n,16] alpha."""
     a0 = a8[:, 0].astype(np.int32)
     a1 = a8[:, 1].astype(np.int32)
     bits = np.zeros(len(a8), np.uint64)
     for k in range(6):
         bits |= a8[:, 2 + k].astype(np.uint64) << np.uint64(8 * k)
     sel = ((bits[:, None] >> (3 * np.arange(16, dtype=np.uint64))) & np.uint64(7)).astype(np.int32)
-    eight = (a0 > a1)[:, None]
-    i = np.arange(8)
-    pal8 = ((7 - i) * a0[:, None] + i * a1[:, None]) // 7
-    pal8 = np.concatenate([a0[:, None], a1[:, None], pal8[:, 1:7]], 1)
-    pal8 = (((7 - np.arange(8)) * 0)[None] + 0)  # replaced below
+    eight = a0 > a1
     p = np.zeros((len(a8), 8), np.int32)
     p[:, 0], p[:, 1] = a0, a1
     for k in range(1, 7):
-        p[:, k + 1] = np.where(eight[:, 0], ((7 - k) * a0 + k * a1) // 7, 0)
+        p[:, k + 1] = ((7 - k) * a0 + k * a1) // 7
     for k in range(1, 5):
-        p[:, k + 1] = np.where(eight[:, 0], p[:, k + 1], ((5 - k) * a0 + k * a1) // 5)
-    p[:, 6] = np.where(eight[:, 0], p[:, 6], 0)
-    p[:, 7] = np.where(eight[:, 0], p[:, 7], 255)
+        p[:, k + 1] = np.where(eight, p[:, k + 1], ((5 - k) * a0 + k * a1) // 5)
+    p[:, 6] = np.where(eight, p[:, 6], 0)
+    p[:, 7] = np.where(eight, p[:, 7], 255)
     return p[np.arange(len(a8))[:, None], sel].astype(np.uint8)
 
 
@@ -346,3 +337,41 @@ def decode_level(tex: Texture, lv: int, face: int = 0):
             img = blocks_to_rgba(endian_fix(lin, fc.endian), fc.format, wb, hb)
             return img[:h, :w]
     raise IndexError(lv)
+
+
+def to_png(tex: Texture, path: str, lv: int = 0, face: int = 0):
+    from PIL import Image
+    Image.fromarray(decode_level(tex, lv, face), 'RGBA').save(path)
+
+
+def contact_sheet(textures, path, cell=128, cols=8):
+    """Level 0 of each texture on a magenta background (alpha shows), one cell each."""
+    from PIL import Image
+    textures = list(textures)
+    S = Image.new('RGB', (cell * cols, cell * max(1, (len(textures) + cols - 1) // cols)), (30, 30, 30))
+    for j, t in enumerate(textures):
+        a = Image.fromarray(decode_level(t, 0), 'RGBA')
+        bg = Image.new('RGBA', a.size, (255, 0, 255, 255))
+        bg.alpha_composite(a)
+        S.paste(bg.convert('RGB').resize((cell, cell), Image.NEAREST), ((j % cols) * cell, (j // cols) * cell))
+    S.save(path)
+
+
+if __name__ == '__main__':
+    # python -m sk3.texture <worldDIST_X.big> <out dir> [max count]: PNGs + contact sheet
+    import os
+    import sys
+    from . import big, sfil
+    src, out = sys.argv[1], sys.argv[2]
+    cap = int(sys.argv[3]) if len(sys.argv) > 3 else 64
+    os.makedirs(out, exist_ok=True)
+    arc, done = big.read(src), []
+    for e in arc.entries:
+        if e.name.endswith('.xsf') and len(done) < cap:
+            for x in sfil.read(arc.read(e))[1]:
+                if len(done) < cap and rw4.parse(x.arena).of_type(T_TEXTURE):
+                    t = from_arena(x.arena)
+                    to_png(t, os.path.join(out, f'{t.name_id:016x}{"_lo" if t.id & LOWRES_FLAG else ""}.png'))
+                    done.append(t)
+    contact_sheet(done, os.path.join(out, 'sheet.png'))
+    print(f'{len(done)} textures -> {out}')

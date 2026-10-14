@@ -28,12 +28,21 @@ NAME_HASH = 0x9B0F1678          # name-table word +0x18 in 255/260 small-world t
 class TexSpec:
     arena_id: int
     name_id: int                     # the 64-bit id in the name string '0x%016x.Texture'
-    fc_words: tuple                  # 6 fetch-constant words (format/size/levels/... all in here)
+    fmt: int                         # Xenos format (texture.FORMATS)
+    width: int
+    height: int
+    nlevels: int
+    cube: bool
     levels: dict                     # {(level, face): linear block bytes, stored byte order}
     table_id: int | None = None      # id in the name-table entry; None = name_id
     name_hash: int = NAME_HASH
     pad: int = 0                     # the name table's last byte (not derivable; retail: varies)
     header: tuple = T.HDR_WORDS
+    fc_override: tuple | None = None   # only when fetch_words() cannot derive the words (no world texture)
+
+    @property
+    def fc_words(self):
+        return self.fc_override or fetch_words(self.fmt, self.width, self.height, self.nlevels, cube=self.cube)
 
     @property
     def fc(self):
@@ -102,8 +111,12 @@ def extract(arena: bytes) -> TexSpec:
     n = T.parse_names(t.names_raw)[0]
     name_end = 0x2C + len(n['name']) + 1
     pad = t.names_raw[name_end] if name_end < len(t.names_raw) else 0
-    return TexSpec(t.arena_id, t.name_id, t.fc.words, untile_levels(t.fc, t.pixels),
-                   None if n['id'] == t.name_id else n['id'], n['hash'], pad, t.header)
+    fc = t.fc
+    cube = fc.dimension == 3
+    derived = fetch_words(fc.format, fc.width, fc.height, fc.levels, cube=cube)
+    return TexSpec(t.arena_id, t.name_id, fc.format, fc.width, fc.height, fc.levels, cube,
+                   untile_levels(fc, t.pixels), None if n['id'] == t.name_id else n['id'], n['hash'], pad,
+                   t.header, None if tuple(derived) == tuple(fc.words) else tuple(fc.words))
 
 
 # ---------------------------------------------------------------- fetch constant from fields
@@ -229,7 +242,11 @@ def encode_bc3_alpha(a):
 
 
 def encode_level(img, fmt):
-    """RGBA uint8 [h,w,4] -> linear little-endian blocks."""
+    """RGBA uint8 [h,w,4] -> linear little-endian blocks (before the Xenos endian swap)."""
+    if fmt == 4:
+        return _to565(img[..., :3]).astype('<u2').tobytes()
+    if fmt == 6:
+        return np.ascontiguousarray(img[..., [2, 1, 0, 3]]).tobytes()      # B G R A = LE u32 ARGB
     b = _blocks(img)
     if fmt == 18:
         return encode_bc1_colors(b[..., :3]).tobytes()
@@ -250,8 +267,35 @@ def mip_chain(img, levels):
     return out
 
 
-def from_image(rgba, name_id, arena_id, alpha=None, levels=None, lowres=False, clamp=(0, 0, 0)):
-    """RGBA uint8 [h,w,4] (power-of-two sides, >= 4) -> TexSpec. BC1 when every alpha is 255 (or
-    alpha=False), else BC3. levels: full chain by default."""
+def from_image(rgba, name_id, arena_id, alpha=None, levels=None, lowres=False, fmt=None):
+    """RGBA uint8 [h,w,4] (power-of-two sides) -> TexSpec.
+    Default format: DXT1 when every alpha is 255 (or alpha=False), else DXT5. lowres=True makes the
+    cPres stand-in copy instead: R5G6B5 (opaque) / A8R8G8B8 (alpha), id flagged with LOWRES_FLAG.
+    levels: full chain by default."""
     rgba = np.asarray(rgba, np.uint8)
-    h, w = rgba
+    h, w = rgba.shape[:2]
+    if w & (w - 1) or h & (h - 1):
+        raise ValueError('power-of-two sizes only')
+    if alpha is None:
+        alpha = bool((rgba[..., 3] < 255).any())
+    if fmt is None:
+        fmt = (6 if alpha else 4) if lowres else (20 if alpha else 18)
+    levels = levels or (max(w, h).bit_length())
+    fc = T.FetchConstant(fetch_words(fmt, w, h, levels))
+    lv = {}
+    for k, im in enumerate(mip_chain(rgba, levels)):
+        lv[(k, 0)] = T.endian_fix(encode_level(im, fmt), fc.endian)   # -> stored (big-endian) order
+    return TexSpec(arena_id, name_id, fmt, w, h, levels, False, lv,
+                   table_id=(name_id | T.LOWRES_FLAG) if lowres else None)
+
+
+def lowres_standin(rgba, name_id, arena_id, size=64):
+    """The small stand-in copy retail keeps in cPres streams for every cTex texture (same name,
+    LOWRES_FLAG id, 565 / 8888, longest side <= size)."""
+    rgba = np.asarray(rgba, np.uint8)
+    h, w = rgba.shape[:2]
+    k = 0
+    while max(w, h) >> k > size:
+        k += 1
+    small = mip_chain(rgba, k + 1)[k]
+    return from_image(small, name_id, arena_id, lowres=True)
