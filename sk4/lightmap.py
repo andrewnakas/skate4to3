@@ -25,6 +25,7 @@ on a CELL grid over the whole map, so shadows cross tile boundaries.
 from __future__ import annotations
 
 import io
+import os
 
 import numpy as np
 from PIL import Image
@@ -183,6 +184,7 @@ class LightBake:
 
     def preview(self, path, step=4):
         v = AMBIENT.mean() * self.amb[::step, ::step] + SUN.mean() * self.sunf[::step, ::step]
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         Image.fromarray(np.clip(v * 255, 0, 255).astype(np.uint8)).save(path)
 
     # ---- per tile -------------------------------------------------------------------------

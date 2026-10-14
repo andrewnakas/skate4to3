@@ -7,8 +7,10 @@ Layout (big-endian):
     0x0C u32 name table offset                       0x10 u32 name table length
     0x14 u32 name layout = nameSlot << 24 | rootSlot << 16 | rootCount
     0x18 0   0x1C u32 total size   0x20 u32 path-directory length (0 in world archives)   0x24-0x2F 0
-    0x30 records, 16 B each, ascending by id: u32 offset/16, u32 0, u32 size, u32 id
-         id = djb2("<root>/<name>")
+    0x30 records, 16 B each, ascending by id: u32 offset >> shift, u32 stored size (0 = stored
+         as-is), u32 size, u32 id; shift = (flags >> 8) & 0xFF (4 in world/DLC archives, 6 in the
+         0x00100600 archives, whose stored entries are RefPack or 'chunkref' containers of
+         0x20000-byte RefPack chunks); id = djb2("<root>/<name>")
     then align16(n) bytes (zero in world and DLC archives); the name table starts right after.
     name table: u8 0, then n slots of nameSlot bytes IN RECORD ORDER, each [u8 root index][name,
          NUL-padded], nameSlot = longest name + 3; at align16(n * nameSlot) (which can overlap the
@@ -53,6 +55,7 @@ class Entry:
     offset: int
     size: int
     id: int
+    stored: int = 0       # record word 1: compressed size on disk, 0 when stored as-is
 
     @property
     def path(self) -> str:
@@ -72,9 +75,16 @@ class Archive:
     entry_table: bytes = b''
 
     def read(self, e: Entry) -> bytes:
+        """The entry's bytes, decoded when the archive stores it compressed."""
         with open(self.path, 'rb') as f:
             f.seek(e.offset)
-            return f.read(e.size)
+            b = f.read(e.stored or e.size)
+        return unpack_stored(b) if e.stored else b
+
+    def read_raw(self, e: Entry) -> bytes:
+        with open(self.path, 'rb') as f:
+            f.seek(e.offset)
+            return f.read(e.stored or e.size)
 
     def by_name(self) -> dict:
         return {e.name: e for e in self.entries}
@@ -147,12 +157,32 @@ def read(path: str) -> Archive:
     a = Archive(path, flags, layout, roots, directory=head[nt + nl:nt + nl + dlen],
                 name_table_offset=nt, stride=stride,
                 entry_table=head[RECORDS + 16 * count:nt])
-    for k, (off16, offhi, size, rid) in enumerate(recs):
+    shift = (flags >> 8) & 0xFF
+    for k, (w0, stored, size, rid) in enumerate(recs):
         r = slot_at(k, stride)
         if not r or djb2(f'{r[0]}/{r[1]}') != rid:
             r = ('', f'~unnamed_{rid:08X}')          # audio archives carry no names at all
-        a.entries.append(Entry(r[0], r[1], off16 * 16 + (offhi << 36), size, rid))
+        a.entries.append(Entry(r[0], r[1], w0 << shift, size, rid, stored))
     return a
+
+
+def unpack_stored(b: bytes) -> bytes:
+    """Decode a compressed entry: one RefPack stream, or a 'chunkref' container
+    (+0x0C total, +0x10 chunk size, +0x14 chunk count, +0x18 alignment; chunks from 0x30, each
+    preceded by u32 stored size, u32 type (2 = RefPack), aligned)."""
+    from . import refpack
+    if b[:8] != b'chunkref':
+        return refpack.decompress(b) if refpack.looks_like(b) else b
+    total, _csz, n, al = struct.unpack_from('>IIII', b, 0xC)
+    pos, out = 0x30, bytearray()
+    for _ in range(n):
+        c, t = struct.unpack_from('>II', b, pos - 8)
+        d = b[pos:pos + c]
+        pos = (pos + c + 8 + al - 1) // al * al
+        out += refpack.decompress(d) if t == 2 else d
+    if len(out) != total:
+        raise ValueError(f'chunkref produced {len(out)} bytes, header said {total}')
+    return bytes(out)
 
 
 # ---- path directory --------------------------------------------------------------------------
@@ -292,6 +322,8 @@ class Source:
 
 def sources_of(a: Archive) -> list:
     """Every entry of an archive as a Source reading from the archive file."""
+    if any(e.stored for e in a.entries):
+        raise ValueError('compressed entries: the writer stores entries as-is only')
     return [Source(e.root, e.name, file=a.path, offset=e.offset, size=e.size) for e in a.entries]
 
 
@@ -338,11 +370,15 @@ def write(out, sources, flags: int = FLAGS_DLC, data_order=None, directory=None,
     table += bytes(-len(table) % 16)
     et = entry_table if entry_table is not None else bytes(_a16(n))
     nt = RECORDS + 16 * n + len(et)
-    pos = _a16(nt + len(table) + len(directory))
+    shift = (flags >> 8) & 0xFF
+    gran = max(16, 1 << shift)
+    up = lambda x: (x + gran - 1) // gran * gran
+    pos = up(nt + len(table) + len(directory))
     offs = {}
     for p in order:
         offs[p] = pos
-        pos = _a16(pos + srcs[p].length)
+        pos = up(pos + srcs[p].length)
+    pos = _a16(pos)
     total = pos
     if total >= 1 << 32:
         raise ValueError('archive past 4 GiB')
@@ -350,7 +386,7 @@ def write(out, sources, flags: int = FLAGS_DLC, data_order=None, directory=None,
                                          slot << 24 | rslot << 16 | len(roots), 0, total,
                                          len(directory)) + bytes(12))
     for p in recs:
-        head += struct.pack('>IIII', offs[p] // 16, 0, srcs[p].length, ids[p])
+        head += struct.pack('>IIII', offs[p] >> shift, 0, srcs[p].length, ids[p])
     head += et + table + directory
     head += bytes(_a16(len(head)) - len(head))
     out.write(head)
