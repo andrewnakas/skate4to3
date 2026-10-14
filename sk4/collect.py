@@ -11,7 +11,7 @@ Linux machine and never committed. This is that analysis as one script:
                                    ecs_mesh_instances.json, material_meshes.json,
                                    level.json  (which level work/ currently describes)
 
-Schemas (what the consumers index, see export_glb.py / bind_depot.py / slim_index.py):
+Schemas (what the consumers index, see export_glb.py / bind_keys.py / slim_index.py):
 
     global_assets.json   {'ebx': {name: [src, pkg, cas, off, size, originalSize]},
                           'res': {name: [src, pkg, cas, off, size, originalSize, resType,
@@ -253,8 +253,42 @@ def level_parts(L, level):
 
 
 def extract_decals(L, parts):
-    """Decal volumes -> decals.json. Rewritten in P1 from our own EBX measurements."""
-    raise NotImplementedError('decal volumes: re-measure in P1')
+    """EnvironmentDecalVolumeData -> decals.json (specs/SKATE_FORMATS.md "Decal volumes").
+
+    Transform rows are right/up/forward/trans; `up` is the thin projection axis (641 of 658 Summer
+    Camp volumes) and the decal face spans right x forward. A volume's own ShaderInstanceKey is a
+    per-instance key with no depot entry; its EnvironmentDecalVolumeTemplateData's key is the one
+    the depots bind (64/64 templates on Summer Camp), so rows carry both: `key`, `tkey`.
+    Row/Column pick a cell of the template's sheet.
+    """
+    tpl_names = {}
+    found = []
+    for n, p in parts.items():
+        if not p:
+            continue
+        for i in p.instances_of('EnvironmentDecalVolumeData'):
+            d = p.read(i)
+            if not d.get('IsEnabled', True):
+                continue
+            imp = d.get('Template')
+            tn = L.name_of(imp) if imp else None
+            found.append((n, d, tn))
+            if tn:
+                tpl_names[tn] = None
+    names = sorted(tpl_names)
+    for tn, tp in zip(names, L.load(names)):
+        if tp:
+            for i in tp.instances_of('EnvironmentDecalVolumeTemplateData'):
+                tpl_names[tn] = tp.read(i).get('ShaderInstanceKey')
+    rows = []
+    for n, d, tn in found:
+        rows.append({'key': d.get('ShaderInstanceKey'), 'tkey': tpl_names.get(tn), 'template': tn,
+                     'T': lt_rows(d['Transform']), 'row': int(d.get('Row') or 0),
+                     'col': int(d.get('Column') or 0), 'alpha': float(d.get('Alpha', 1.0)), 'src': n})
+    dump('decals.json', rows)
+    print(f"  decal volumes {len(rows):,} (enabled), {len(names):,} templates, "
+          f"{sum(1 for v in tpl_names.values() if v):,} with a template key")
+    return rows
 
 
 def extract_fills(L, parts):

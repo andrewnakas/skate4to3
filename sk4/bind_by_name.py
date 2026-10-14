@@ -1,6 +1,6 @@
 """Fill the gaps the depot cannot: resolve a material to a texture by its own NAME.
 
-Most materials bind through their shader block (tools/bind_depot.py). A few do not - their
+Most materials bind through their shader block (sk4/bind_keys.py). A few do not - their
 block names a texture whose colour will not decode, or they are engine dev materials with no
 real binding at all - and those land on a generic class texture. Two of them,
 `DEV_ProxyGrid_World_M_Asphalt` and `Skatepark_Trim_Edges_M`, covered 14% of the skatepark
@@ -9,8 +9,8 @@ view, so "a few" is not the same as "a little".
 The names are not arbitrary: skate. names a material after the library asset it is built from
 (`Decal_Envelope_Trim_01_2x2m_M_DM_mat` -> `world/materials/decal/envelope_trim_01_2x2m/
 decal_envelope_trim_01_2x2m_c`), and a dev material still names its SURFACE. So the stem is
-tried against the texture index first, then the surface-family scoring that
-tools/bind_terrain_presets.py uses for the terrain presets.
+tried against the texture index first, then the token-overlap family match sk4/bind_keys.py
+uses for the terrain presets.
 
 Runs after tools/inherit_variants.py, on work/material_textures.json in place.
 """
@@ -19,7 +19,7 @@ import json, os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import textures
-from bind_terrain_presets import resolve as family_resolve
+from bind_keys import preset_entry, role_of, family_of
 from texcache import TexCache, WORK
 
 DROP_TOKENS = ('mat', 'm', 'dm', 'proxy', 'shadow', 'grd', 'sl', 'ta')
@@ -28,7 +28,6 @@ DROP_TOKENS = ('mat', 'm', 'dm', 'proxy', 'shadow', 'grd', 'sl', 'ta')
 # "nanaimo" - and vegetation cards on `Orange_Dark_proxy`. So a family match must name a
 # family long enough to mean something, score well, and actually appear in what it picked.
 MIN_FAMILY_LEN = 4
-MIN_FAMILY_SCORE = 4
 # Pipeline words, not surface families. `Proxy_Iron_proxy` scored 4 against
 # `vegetation_proxy_cards_02_c` purely because both say "proxy".
 NOT_A_FAMILY = {'proxy', 'base', 'trim', 'dark', 'light', 'main', 'default', 'temp', 'test'}
@@ -53,7 +52,10 @@ def main():
     by_base = {}
     for n in tex:
         by_base.setdefault(n.rsplit('/', 1)[-1].lower(), n)
-    tex_names = list(tex)
+    families = {}
+    for n in tex:
+        if n.startswith('world/materials/') and role_of(n) == 'c':
+            families.setdefault(family_of(n), {})['c'] = n
 
     # drop what a previous run of THIS tool added, so its rules can be re-applied cleanly
     for k in [k for k, e in mt.items() if isinstance(e, dict) and 'by_name' in e]:
@@ -79,11 +81,10 @@ def main():
             low = re.sub(r'^dev_proxygrid_world_m_', '', m.lower())
             fam = re.split(r'[^a-z0-9]+', low)[0]
             if len(fam) >= MIN_FAMILY_LEN and fam not in NOT_A_FAMILY:
-                r = family_resolve(low, tex_names)
-                if (r.get('c') and r['score'] >= MIN_FAMILY_SCORE
-                        and fam in r['c'].lower()):
+                r = preset_entry(low, families)
+                if r and r.get('c') and fam in r['c'].rsplit('/', 1)[-1].lower():
                     hit = r['c']
-                    how[m] = f"family(score {r['score']})"
+                    how[m] = 'family'
         if hit:
             picks[m] = hit
     print(f"resolved by name: {len(picks)}")

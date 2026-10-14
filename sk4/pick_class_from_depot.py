@@ -20,7 +20,7 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import bind_depot
+from bind_keys import role_of
 from texcache import WORK
 
 MAX_MEAN = 195.0        # near-white: the verifier fails a class texture above this
@@ -58,7 +58,7 @@ def main():
     norm_of = {}
     for e in depot.values():
         col = e.get('c')
-        if not col or bind_depot.is_placeholder(col) or bind_depot.is_decal(col):
+        if not col or role_of(col) != 'c' or '/decal/' in col or col.rsplit('/', 1)[-1].startswith('decal_'):
             continue
         if 'projectlod' in col or '_atlas' in col:
             continue

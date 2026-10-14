@@ -207,11 +207,12 @@ Relocatable blob. resMeta = u32 relocOffset, u32 relocSize, u16, u16, u32 keyCou
   descriptor}. Several keys share a descriptor (e.g. a material and its `_Shadow` variant).
 - descriptor: {u64 -> block, u64 hash, u64 size}; blocks are packed back to back.
 - block: u32 recordCount, then records (NOT sorted by hash):
-  `u64 paramHash, u32 type, u16 count, u16 id, u8 (count & 0xFF)`, then the payload:
-  - type 0x14C5FC30 (texture): count x {16 B instance guid, 16 B partition guid}, no padding;
-  - every other type: 3 zero bytes, then count x element. Element sizes: 0x566E2DD0 = 1;
+  `u64 paramHash, u32 type, u16 count, u16 tag`, then the payload:
+  - type 0x14C5FC30 (texture): u8 flag (1), then {16 B instance guid, 16 B partition guid};
+  - every other type: u32 count (equal to the header count in every record, including 256), then
+    count x element. Element sizes: 0x566E2DD0 = 1;
     0x57F970CA, 0x2BB65C2D (float), 0x36ED3444, 0x8E4A817E, 0x7826E998 = 4; 0x2A36E9D5 = 8;
-    0x885EFF59 (vec3) = 12; 0x7F999829 = 16 (vec4). Count reaches 256 (u8 field wraps to 0).
+    0x885EFF59 (vec3) = 12; 0x7F999829 = 16 (vec4).
   With exactly these sizes all 64,330 blocks walk to their end (`work/scratch/learn_depot.py`).
 - Oracle: record hashes, types and order == Studio `shader-params` for 157 sampled keys; vec3/float
   values equal (`tests/test_depot.py`).
@@ -220,5 +221,5 @@ Relocatable blob. resMeta = u32 relocOffset, u32 relocSize, u16, u16, u32 keyCou
   `tests/test_depot_guids.py`). Studio's *printed texture names* are not a usable oracle: they equal
   ours for 45/168 keys, are shifted by one record for 43, and are blank/different for the rest
   (Studio leaves global textures such as panoramas and default masks unnamed).
-- Param hashes do not name a fixed channel: the same hash carries `_c`, `_ny` and `_msk` textures in
-  different materials, so roles come from the bound texture's own name suffix.
+- The u16 tag is constant per parameter across shaders, the u64 hash differs per shader (our own
+  2026-09-23 notes, re-checked below). Roles are learned per tag from bound texture name suffixes.

@@ -890,7 +890,7 @@ HOT_MATERIAL_PX = 512
 HOT_TEXTURE_M2 = 40_000.0
 HOT_TEX = set()
 CLASS_TEXTURES = os.path.join(WORK, 'class_textures.json')
-# Decal volumes (graffiti, stains, posters): tools/collect.py -> decals.json, tools/bake_decals.py
+# Decal volumes (graffiti, stains, posters): sk4/collect.py -> decals.json, sk4/decal_sheets.py
 # -> decal_textures.json + RGBA PNGs. Drawn as lifted quads in their own class.
 DECALS_JSON = os.path.join(WORK, 'decals.json')
 DECAL_TEXTURES = os.path.join(WORK, 'decal_textures.json')
@@ -1029,7 +1029,7 @@ def _tint_srgb(tint):
 
 
 def _tinted(data: bytes, tint) -> bytes:
-    """PNG with the material's paint applied. See TINT in tools/bind_depot.py."""
+    """PNG with the material's paint applied. Tint comes from sk4/bind_keys.py."""
     im = Image.open(io.BytesIO(data)).convert('RGB')
     a = np.asarray(im, dtype=np.float32) * _tint_srgb(tint)[None, None, :]
     buf = io.BytesIO()
@@ -1134,7 +1134,7 @@ def _load_binding(path, into_albedo, into_normal, into_atlas):
 def load_material_textures():
     """source material name -> texture asset name (the texture the GAME assigns it).
 
-    Resolved by tools/bind_depot.py through the material's shader block; this is the
+    Resolved by sk4/bind_keys.py through the material's shader block; this is the
     fallback path for a section whose own depot key carries no colour slot.
     """
     return _load_binding(MATERIAL_TEXTURES, TEX_BLOBS, TEX_NORMALS, ATLAS_BASES)
@@ -1379,7 +1379,7 @@ GRIND_MAX_TOTAL = 8000
 # Materials whose UVs index a sheet rather than tile a surface. A section here is only
 # world-projected if we could NOT find the sheet: with the sheet in hand its own UVs are
 # right and reprojecting them would be the error. The terrain virtual-texture presets used
-# to be listed too; they no longer need it, because tools/bind_terrain_presets.py resolves
+# to be listed too; they no longer need it, because sk4/bind_keys.py resolves
 # their surface and their authored UVs already measure 0.49 tiles/m.
 ATLAS_RX = re.compile(r'vtar_.*atlas|_proxy_atlas')
 
@@ -2352,7 +2352,7 @@ _DECAL_BY_BASE = {}
 
 
 def decal_key_for_base(base):
-    """'dec:<slug>' for a colour texture that tools/bake_decals.py baked with its mask, else None."""
+    """'dec:<slug>' for a colour texture that sk4/decal_sheets.py baked with its mask, else None."""
     if not base.startswith('world/materials/decal/') and '/graffiti/' not in base:
         return None
     if not _DECAL_BY_BASE and os.path.exists(DECAL_TEXTURES):

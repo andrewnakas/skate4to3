@@ -1,8 +1,7 @@
 """skate.'s layered materials -> textures the exporter can draw.
 
-The ShaderBlockDepot block of a material (tools/bind_depot.py finds it) is a list of typed
-parameter records, decoded 2026-09-23 (all 1,782 blocks the level uses parse to their exact
-length):
+The ShaderBlockDepot block of a material (sk4/depot.py parses it) is a list of typed
+parameter records:
 
     u32 N; N x { u64 paramHash, u32 typeId, u16 count, u16 tag, payload }
     typeId 0x14C5FC30 texture: u8 flag + instance guid(16) + partition guid(16)
@@ -40,7 +39,8 @@ import numpy as np
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import bind_depot as bd  # noqa: E402
+from bind_keys import load_depots  # noqa: E402
+import depot  # noqa: E402
 import textures  # noqa: E402
 from cas import decompress_many  # noqa: E402
 from texcache import TexCache, WORK  # noqa: E402
@@ -52,27 +52,6 @@ TAG_ARRAY, TAG_TOP, TAG_SLOPE, TAG_TERRAIN_COLOUR = 0x739C, 0xAAEF, 0xC89D, 0x8C
 # tiled 0.5/m, a segment sheet at 0xF7A9 on uv0 (`_uvw`: R,G = per-slab random offset, B = wear),
 # per-slab palette float3[4] at 0xD220 (else 0x1632 / 0xF1E9).
 TAG_SEG_DETAIL, TAG_SEG_SHEET, TAG_SEG_PAL = 0xEA1D, 0xF7A9, (0xD220, 0x1632, 0xF1E9)
-
-
-def parse_block(b):
-    """-> {tag: (typeId, count, payload)}; raises if the block does not parse to its length."""
-    n = struct.unpack_from('<I', b, 0)[0]
-    o, out = 4, {}
-    for _ in range(n):
-        _h, t, c, tag = struct.unpack_from('<QIHH', b, o)
-        o += 16
-        if t == T_TEX:
-            out[tag] = (t, 1, b[o:o + 33])
-            o += 33
-        else:
-            cnt = struct.unpack_from('<I', b, o)[0]
-            o += 4
-            es = ELEM.get(t, 4)
-            out[tag] = (t, cnt, b[o:o + es * cnt])
-            o += es * cnt
-    if o != len(b):
-        raise ValueError(f'block parsed to {o} of {len(b)} bytes')
-    return out
 
 
 def floats(rec):
@@ -150,8 +129,8 @@ def main():
     RES = json.load(open(os.path.join(WORK, 'global_assets.json')))['res']
     g2t = {bytes.fromhex(k): v for k, v in
            json.load(open(os.path.join(WORK, 'guid_to_texture.json'))).items()}
-    store, keymap = bd.depot_index(RES, bd.Reader())
     del RES
+    mats, _ = load_depots()
     dt = json.load(open(os.path.join(WORK, 'depot_textures.json')))
     kt_path = os.path.join(WORK, 'depot_key_textures.json')
     kt = json.load(open(kt_path))
@@ -170,13 +149,11 @@ def main():
     for k, rec in dt.items():
         if not k.isdigit():
             continue
-        blk = bd.key_block(store, keymap, int(k))
-        if blk is None:
+        params = mats.get(int(k))
+        if params is None:
             continue
-        try:
-            P = parse_block(blk)
-        except Exception:  # noqa: BLE001
-            continue
+        P = {p.tag: ((p.type, 1, b'' + p.raw[:32]) if p.type == depot.TEXTURE else (p.type, p.count, p.raw))
+             for p in params}
         if TAG_SEG_DETAIL in P and TAG_SEG_SHEET in P and any(t in P for t in TAG_SEG_PAL):
             dn = g2t.get(P[TAG_SEG_DETAIL][2][17:33])
             sn = g2t.get(P[TAG_SEG_SHEET][2][17:33])
@@ -221,7 +198,7 @@ def main():
                        'w': files[0][1], 'h': files[0][2], 'top_slice': top, 'slope_deg': slope,
                        'materials': rec.get('materials', [])[:3]}
         elif TAG_TERRAIN_COLOUR in P and any('TerrainMesh_FetchVirtualTexture' in m for m in rec.get('materials', [])):
-            # the preset binding is keyed by surface (tools/bind_terrain_presets.py: preset:<surface>)
+            # the preset binding is keyed by surface (sk4/bind_keys.py: preset:<surface>)
             mat = next(m for m in rec['materials'] if 'TerrainMesh_FetchVirtualTexture' in m)
             surf = mat.rsplit('_M_', 1)[-1].lower()
             if surf.endswith('_shadow'):

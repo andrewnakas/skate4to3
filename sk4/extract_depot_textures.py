@@ -90,7 +90,7 @@ def main():
         if nrm and nrm[4]:
             e['normal'] = nrm[0]
             e['nw'], e['nh'] = nrm[1], nrm[2]
-        for m in v['materials']:
+        for m in v.get('materials', []):
             out[m] = e
     # Written through a temp file and read back: an earlier run printed 588 materials while
     # the file on disk held 581, and a silently short material map is the kind of fault that

@@ -8,9 +8,10 @@ Layout measured in specs/SKATE_FORMATS.md ("ShaderBlockDepot"); every one of 64,
     key      {u64 materialKey, u64 -> descriptor}    (keys share descriptors)
     desc     {u64 -> block, u64 blockHash, u64 blockSize}
     block    u32 recordCount, then records:
-             u64 paramHash, u32 type, u16 count, u16 id, u8 count&0xFF, payload
-             texture: count x {16 B instance guid, 16 B partition guid} of the TextureAsset EBX
-             others:  3 zero bytes, then count x element (size by type)
+             u64 paramHash, u32 type, u16 count, u16 tag, payload
+             texture: u8 flag (1), then {16 B instance guid, 16 B partition guid} of the TextureAsset
+             others:  u32 count (repeats the header count, also past 255), then count x element
+             The tag is constant per parameter across shaders; the hash differs per shader.
 """
 from __future__ import annotations
 
@@ -34,8 +35,8 @@ class Param:
     hash: int
     type: int
     count: int
-    id: int
-    raw: bytes                     # payload after the 3 pad bytes (values), or the guid pairs
+    tag: int
+    raw: bytes                     # element values, or the guid pairs
 
     @property
     def textures(self) -> list[tuple[str, str]]:
@@ -54,14 +55,19 @@ def parse_block(b: bytes) -> list[Param]:
     n = struct.unpack_from('<I', b, 0)[0]
     p, out = 4, []
     for _ in range(n):
-        h, t, c, ident, _c8 = struct.unpack_from('<QIHHB', b, p)
-        p += 17
+        h, t, c, tag = struct.unpack_from('<QIHH', b, p)
+        p += 16
         if t == TEXTURE:
-            ln, skip = 32 * c, 0
+            p += 1                                   # flag
+            ln = 32 * c
         else:
-            ln, skip = c * ELEMENT[t], 3
-        out.append(Param(h, t, c, ident, b[p + skip:p + skip + ln]))
-        p += skip + ln
+            k = struct.unpack_from("<I", b, p)[0]
+            if k != c:
+                raise ValueError(f'record {h:#x}: count {c} vs payload count {k}')
+            p += 4
+            ln = k * ELEMENT[t]
+        out.append(Param(h, t, c, tag, b[p:p + ln]))
+        p += ln
     if any(b[p:]):
         raise ValueError(f'block walk ended at {p} of {len(b)} with data left')
     return out
