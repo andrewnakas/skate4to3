@@ -66,8 +66,8 @@ def main():
                 k += 1
                 put(f'cPres_{x}_{z}_high', k, tex_arena(os.path.join(a.arenas, 'tex', f'{t}.png'),
                                                          tile_texture_id(int(t, 16), x, z), lowres=True))
-        if 'sim_bytes' in rec:
-            put(f'cSim_{x}_{z}_high', 0, open(os.path.join(a.arenas, f'cSim_{name}.arena'), 'rb').read())
+        for k, fn in enumerate(rec.get('sim_arenas', [])):
+            put(f'cSim_{x}_{z}_high', k, open(os.path.join(a.arenas, fn), 'rb').read())
         if texs:
             cap = {t: max(meta[t]['w'], meta[t]['h']) for t in texs}
             size = {t: meta[t]['bytes'] for t in texs}

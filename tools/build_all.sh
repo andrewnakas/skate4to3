@@ -30,11 +30,14 @@ for t in "${targets[@]}"; do
     set -e
     export SKATE_MOD_ROOT="$mod"
     GW=work/$id; [ -z "$mod" ] && GW=work
-    GLOBAL_WORK=$GW bash tools/front_end.sh "$lvl" $id/lvl
-    [ -f $W/hd_flags.txt ] || cp work/mpr/hd_flags.txt $W/
-    bash tools/export.sh $id/lvl $(cat $W/hd_flags.txt)
+    if [ ! -f $W/glb/d2s3_tiles.json ]; then      # GLBs are kept: later rebuilds start at assemble
+      GLOBAL_WORK=$GW bash tools/front_end.sh "$lvl" $id/lvl
+      [ -f $W/hd_flags.txt ] || cp work/mpr/hd_flags.txt $W/
+      bash tools/export.sh $id/lvl $(cat $W/hd_flags.txt)
+    fi
+    rm -rf $W/arenas
     python -u -m sk3.assemble $W/glb $W/arenas
     python -u tools/build_pack.py $W/arenas $W/glb "$disp" --out $W/pack
-  ) > $L 2>&1 && { echo "  ok $(tail -1 $L | cut -c1-150)" | tee -a work/batch/summary.log; rm -rf $W/glb $W/arenas $W/textures; } \
+  ) > $L 2>&1 && { echo "  ok $(tail -1 $L | cut -c1-150)" | tee -a work/batch/summary.log; rm -rf $W/arenas $W/textures; } \
             || echo "  FAILED: $(grep -a -E 'Error|Traceback' $L | tail -1 | cut -c1-150)" | tee -a work/batch/summary.log
 done

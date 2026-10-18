@@ -175,6 +175,29 @@ def split_by_tile(P, I, size):
     return out
 
 
+# Retail collision arenas are <= 752 KB (DownTown/University/Industrial/SkateSchool) and a tile
+# stream holds up to 5 of them; a 2.9 MB one left SDM Interior 1 loading forever.
+MAX_COLLISION_TRIS = 30000
+
+
+def split_triangles(V, T, limit):
+    """Index arrays splitting T into spatially compact groups of <= limit triangles (median cuts
+    along the longer horizontal axis)."""
+    c = V[T].mean(1)
+    out, todo = [], [np.arange(len(T))]
+    while todo:
+        idx = todo.pop()
+        if len(idx) <= limit:
+            out.append(idx)
+            continue
+        ext = c[idx].max(0) - c[idx].min(0)
+        ax = 0 if ext[0] >= ext[2] else 2
+        order = idx[np.argsort(c[idx, ax], kind='stable')]
+        h = len(order) // 2
+        todo += [order[h:], order[:h]]
+    return out
+
+
 def compact(P, I, *attrs):
     used, inv = np.unique(I.reshape(-1), return_inverse=True)
     return (P[used], inv.reshape(-1, 3)) + tuple(None if a is None else a[used] for a in attrs)
@@ -292,16 +315,23 @@ def assemble(glb_dir, out_dir, size=100.0, shift=None):
             Vs, Ts, Ss, base = [], [], [], 0
             for P, T, s in coll[key]:
                 Vs.append(P); Ts.append(T + base); Ss.append(np.full(len(T), s)); base += len(P)
-            mesh, _rep = cw.build_mesh(np.concatenate(Vs), np.concatenate(Ts), np.concatenate(Ss))
+            V, Tall, Sall = np.concatenate(Vs), np.concatenate(Ts), np.concatenate(Ss)
             ss = None
             if spl[key]:
                 ss = sp.SplineSet(0, [sp.Spline(h64('spline', name, i), 0x2C70170700000000,
                                                 [sp.straight_segment(a, b) for a, b in zip(r[:-1], r[1:])])
                                       for i, r in enumerate(spl[key])])
-            data, _spec = cw.build_tile_arena(mesh, h32('cSim', name), f'cSim_{name}', h64('cSimInst', name),
-                                              spline_set=ss, splines_id=h64('splines', name))
-            open(os.path.join(out_dir, f'cSim_{name}.arena'), 'wb').write(data)
-            rec['sim_bytes'] = len(data)
+            rec['sim_arenas'], rec['sim_bytes'] = [], 0
+            for ci, sel in enumerate(split_triangles(V, Tall, MAX_COLLISION_TRIS)):
+                Vc, Tc = compact(V, Tall[sel])
+                mesh, _rep = cw.build_mesh(Vc, Tc, Sall[sel])
+                data, _spec = cw.build_tile_arena(mesh, h32('cSim', name, ci), f'cSim_{name}_{ci}',
+                                                  h64('cSimInst', name, ci), spline_set=ss if ci == 0 else None,
+                                                  splines_id=h64('splines', name))
+                fn = f'cSim_{name}_{ci:02d}.arena'
+                open(os.path.join(out_dir, fn), 'wb').write(data)
+                rec['sim_arenas'].append(fn)
+                rec['sim_bytes'] += len(data)
             rec['sim_tris'] = int(sum(len(t) for t in Ts))
             rec['splines'] = len(spl[key])
         tiles[name] = rec
